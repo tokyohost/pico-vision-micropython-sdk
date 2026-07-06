@@ -8,7 +8,7 @@ JSON 解压、解析及业务分发仍由 Python 完成。
 
 ```sh
 make BOARD=RPI_PICO \
-  USER_C_MODULES="modules/fn_canvas/micropython.cmake;modules/fn_protocol/micropython.cmake"
+  USER_C_MODULES=modules/micropython.cmake
 ```
 
 固件内可执行以下代码确认模块可用：

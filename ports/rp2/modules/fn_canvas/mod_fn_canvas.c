@@ -13,7 +13,7 @@
 #include "py/obj.h"
 #include "py/runtime.h"
 
-#define FN_CANVAS_API_VERSION (6)
+#define FN_CANVAS_API_VERSION (7)
 
 #define FN_CANVAS_COMMAND_FILL_RECT (0)
 #define FN_CANVAS_COMMAND_LINE (1)
@@ -142,20 +142,36 @@ static void fn_canvas_line_local(uint8_t *buffer, int width, int height,
     }
 }
 
-/** 绘制已经换算为本地坐标并完成尺寸校验的矩形边框。 */
+/** 绘制已经换算为本地坐标并完成尺寸校验的指定粗细矩形边框。 */
 static void fn_canvas_rect_local(uint8_t *buffer, int width, int height,
-    int x, int y, int rect_width, int rect_height, uint16_t color) {
-    if (rect_width <= 0 || rect_height <= 0) {
+    int x, int y, int rect_width, int rect_height, uint16_t color,
+    int thickness) {
+    if (rect_width <= 0 || rect_height <= 0 || thickness <= 0) {
         return;
     }
-    fn_canvas_line_local(buffer, width, height, x, y,
-        x + rect_width - 1, y, color);
-    fn_canvas_line_local(buffer, width, height, x, y + rect_height - 1,
-        x + rect_width - 1, y + rect_height - 1, color);
-    fn_canvas_line_local(buffer, width, height, x, y,
-        x, y + rect_height - 1, color);
-    fn_canvas_line_local(buffer, width, height, x + rect_width - 1, y,
-        x + rect_width - 1, y + rect_height - 1, color);
+    const int shorter_side = rect_width < rect_height
+        ? rect_width : rect_height;
+    const int maximum_thickness = shorter_side / 2 + shorter_side % 2;
+    if (thickness > maximum_thickness) {
+        thickness = maximum_thickness;
+    }
+    for (int inset = 0; inset < thickness; ++inset) {
+        const int inset_width = rect_width - inset * 2;
+        const int inset_height = rect_height - inset * 2;
+        if (inset_width <= 0 || inset_height <= 0) {
+            break;
+        }
+        fn_canvas_line_local(buffer, width, height, x + inset, y + inset,
+            x + inset + inset_width - 1, y + inset, color);
+        fn_canvas_line_local(buffer, width, height,
+            x + inset, y + inset + inset_height - 1,
+            x + inset + inset_width - 1, y + inset + inset_height - 1, color);
+        fn_canvas_line_local(buffer, width, height, x + inset, y + inset,
+            x + inset, y + inset + inset_height - 1, color);
+        fn_canvas_line_local(buffer, width, height,
+            x + inset + inset_width - 1, y + inset,
+            x + inset + inset_width - 1, y + inset + inset_height - 1, color);
+    }
 }
 
 /** 返回模块能力版本，供 Python 在运行时判断当前 UF2 是否支持加速。 */
@@ -239,9 +255,8 @@ static mp_obj_t fn_canvas_line(size_t argument_count, const mp_obj_t *arguments)
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(fn_canvas_line_obj, 10, 10, fn_canvas_line);
 
-/** 按原样式的上、下、左、右顺序一次绘制矩形边框。 */
+/** 一次绘制指定粗细的矩形边框，未传粗细时保持一像素兼容行为。 */
 static mp_obj_t fn_canvas_draw_rect(size_t argument_count, const mp_obj_t *arguments) {
-    (void)argument_count;
     int canvas_width, canvas_height, origin_x, origin_y;
     uint8_t *buffer = fn_canvas_parse_canvas(arguments, &canvas_width,
         &canvas_height, &origin_x, &origin_y);
@@ -250,12 +265,14 @@ static mp_obj_t fn_canvas_draw_rect(size_t argument_count, const mp_obj_t *argum
     const int width = mp_obj_get_int(arguments[7]);
     const int height = mp_obj_get_int(arguments[8]);
     const uint16_t color = (uint16_t)mp_obj_get_int(arguments[9]);
+    const int thickness = argument_count > 10
+        ? mp_obj_get_int(arguments[10]) : 1;
     fn_canvas_rect_local(buffer, canvas_width, canvas_height,
-        x, y, width, height, color);
+        x, y, width, height, color, thickness);
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
-    fn_canvas_draw_rect_obj, 10, 10, fn_canvas_draw_rect);
+    fn_canvas_draw_rect_obj, 10, 11, fn_canvas_draw_rect);
 
 /** 一次调用绘制规则点阵网格，减少 Python 与 C 的跨层调用。 */
 static mp_obj_t fn_canvas_draw_grid(size_t argument_count, const mp_obj_t *arguments) {
@@ -718,7 +735,7 @@ static mp_obj_t fn_canvas_draw_commands(size_t argument_count,
                 value_a - origin_x, value_b - origin_y, color);
         } else if (operation == FN_CANVAS_COMMAND_DRAW_RECT) {
             fn_canvas_rect_local(buffer, width, height,
-                x, y, value_a, value_b, color);
+                x, y, value_a, value_b, color, 1);
         } else {
             mp_raise_ValueError(MP_ERROR_TEXT("unknown draw command"));
         }
