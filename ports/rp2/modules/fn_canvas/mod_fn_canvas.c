@@ -108,10 +108,18 @@ static mp_obj_t fn_canvas_fill_rect(size_t argument_count, const mp_obj_t *argum
     int top = mp_obj_get_int(arguments[6]) - origin_y;
     int right = left + mp_obj_get_int(arguments[7]);
     int bottom = top + mp_obj_get_int(arguments[8]);
-    if (left < 0) left = 0;
-    if (top < 0) top = 0;
-    if (right > canvas_width) right = canvas_width;
-    if (bottom > canvas_height) bottom = canvas_height;
+    if (left < 0) {
+        left = 0;
+    }
+    if (top < 0) {
+        top = 0;
+    }
+    if (right > canvas_width) {
+        right = canvas_width;
+    }
+    if (bottom > canvas_height) {
+        bottom = canvas_height;
+    }
     if (left < right && top < bottom) {
         fn_canvas_fill_local(buffer, canvas_width, left, top, right, bottom,
             (uint16_t)mp_obj_get_int(arguments[9]));
@@ -140,7 +148,9 @@ static mp_obj_t fn_canvas_line(size_t argument_count, const mp_obj_t *arguments)
     int error = delta_x + delta_y;
     for (;;) {
         fn_canvas_pixel_local(buffer, width, height, x0, y0, color);
-        if (x0 == x1 && y0 == y1) break;
+        if (x0 == x1 && y0 == y1) {
+            break;
+        }
         const int doubled = error * 2;
         if (doubled >= delta_y) {
             error += delta_y;
@@ -164,7 +174,9 @@ static mp_obj_t fn_canvas_fill_polygon(size_t argument_count, const mp_obj_t *ar
     size_t point_count;
     mp_obj_t *points;
     mp_obj_get_array(arguments[5], &point_count, &points);
-    if (point_count < 3) return mp_const_false;
+    if (point_count < 3) {
+        return mp_const_false;
+    }
     const uint16_t color = (uint16_t)mp_obj_get_int(arguments[6]);
     int *point_x = m_new(int, point_count);
     int *point_y = m_new(int, point_count);
@@ -203,8 +215,12 @@ static mp_obj_t fn_canvas_fill_polygon(size_t argument_count, const mp_obj_t *ar
         for (size_t index = 0; index + 1 < intersection_count; index += 2) {
             int left = intersections[index];
             int right = intersections[index + 1] + 1;
-            if (left < 0) left = 0;
-            if (right > width) right = width;
+            if (left < 0) {
+                left = 0;
+            }
+            if (right > width) {
+                right = width;
+            }
             if (left < right) {
                 fn_canvas_fill_local(buffer, width, left, scan_y, right,
                     scan_y + 1, color);
