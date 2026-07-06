@@ -43,7 +43,13 @@ jobs:
 
       - name: Build RP2 firmware
         run: |
-          make -C ports/rp2 BOARD=${BOARD}
+          make -C ports/rp2 BOARD=${BOARD} \
+            USER_C_MODULES=modules/fn_canvas/micropython.cmake
+
+      - name: Verify fn_canvas module is linked
+        run: |
+          grep -q "MP_QSTR_fn_canvas" \
+            ports/rp2/build-${BOARD}/genhdr/qstrdefs.generated.h
 
       - name: Prepare release files
         run: |
@@ -60,4 +66,4 @@ jobs:
 
           gh release create "$TAG" "$FILE" \
             --title "$TAG" \
-            --notes "MicroPython RP2 UF2 firmware for ${BOARD}."
+            --notes "MicroPython RP2 UF2 firmware for ${BOARD}, with fn_canvas API v2."
