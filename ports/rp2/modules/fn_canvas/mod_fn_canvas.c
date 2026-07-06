@@ -10,9 +10,10 @@
 
 #include "py/binary.h"
 #include "py/obj.h"
+#include "py/objdict.h"
 #include "py/runtime.h"
 
-#define FN_CANVAS_API_VERSION (3)
+#define FN_CANVAS_API_VERSION (5)
 
 /** 获取可写画布缓冲区，并校验其容量。 */
 static uint8_t *fn_canvas_get_buffer(mp_obj_t object, size_t required_size) {
@@ -379,6 +380,175 @@ static mp_obj_t fn_canvas_draw_columns(size_t argument_count, const mp_obj_t *ar
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
     fn_canvas_draw_columns_obj, 7, 7, fn_canvas_draw_columns);
 
+/**
+ * 一次完成折线图点阵、缩放、插值、分区着色及实心填充。
+ * Python 端仅传入图表定义与原始数据，避免创建坐标点和逐列调用。
+ */
+static mp_obj_t fn_canvas_draw_line_chart(size_t argument_count,
+    const mp_obj_t *arguments) {
+    enum {
+        ARG_BUFFER, ARG_CANVAS_WIDTH, ARG_CANVAS_HEIGHT, ARG_ORIGIN_X,
+        ARG_ORIGIN_Y, ARG_X, ARG_Y, ARG_WIDTH, ARG_HEIGHT, ARG_VALUES,
+        ARG_MAXIMUM, ARG_COLOR, ARG_FILLED, ARG_REGIONS, ARG_GRID_STEP_X,
+        ARG_GRID_STEP_Y, ARG_GRID_COLOR, ARG_COLOR_CALLBACK,
+        ARG_COLOR_CACHE_STEP,
+    };
+    (void)argument_count;
+    int canvas_width, canvas_height, origin_x, origin_y;
+    uint8_t *buffer = fn_canvas_parse_canvas(arguments, &canvas_width,
+        &canvas_height, &origin_x, &origin_y);
+    const int chart_x = mp_obj_get_int(arguments[ARG_X]);
+    const int chart_y = mp_obj_get_int(arguments[ARG_Y]);
+    const int chart_width = mp_obj_get_int(arguments[ARG_WIDTH]);
+    const int chart_height = mp_obj_get_int(arguments[ARG_HEIGHT]);
+    if (chart_width <= 0 || chart_height <= 0) {
+        return mp_const_none;
+    }
+    const int grid_step_x = mp_obj_get_int(arguments[ARG_GRID_STEP_X]);
+    const int grid_step_y = mp_obj_get_int(arguments[ARG_GRID_STEP_Y]);
+    const uint16_t grid_color = (uint16_t)mp_obj_get_int(arguments[ARG_GRID_COLOR]);
+    if (grid_step_x > 0 && grid_step_y > 0) {
+        for (int x = chart_x; x < chart_x + chart_width; x += grid_step_x) {
+            for (int y = chart_y; y < chart_y + chart_height; y += grid_step_y) {
+                fn_canvas_pixel_local(buffer, canvas_width, canvas_height,
+                    x - origin_x, y - origin_y, grid_color);
+            }
+        }
+    }
+
+    size_t value_count;
+    mp_obj_t *value_objects;
+    mp_obj_get_array(arguments[ARG_VALUES], &value_count, &value_objects);
+    if (value_count < 2) {
+        return mp_const_none;
+    }
+    mp_float_t *chart_values = m_new(mp_float_t, value_count);
+    for (size_t index = 0; index < value_count; ++index) {
+        chart_values[index] = mp_obj_get_float(value_objects[index]);
+    }
+    mp_float_t maximum = mp_obj_get_float(arguments[ARG_MAXIMUM]);
+    if (maximum <= 0) {
+        maximum = 1;
+        for (size_t index = 0; index < value_count; ++index) {
+            const mp_float_t value = chart_values[index];
+            if (value > maximum) {
+                maximum = value;
+            }
+        }
+    }
+    const uint16_t default_color = (uint16_t)mp_obj_get_int(arguments[ARG_COLOR]);
+    const bool filled = mp_obj_is_true(arguments[ARG_FILLED]);
+    const mp_obj_t color_callback = arguments[ARG_COLOR_CALLBACK];
+    const mp_float_t color_cache_step = mp_obj_get_float(
+        arguments[ARG_COLOR_CACHE_STEP]);
+    mp_obj_t color_cache_object = mp_obj_new_dict(0);
+    mp_obj_dict_t *color_cache = MP_OBJ_TO_PTR(color_cache_object);
+    size_t region_count = 0;
+    mp_float_t *region_limits = NULL;
+    uint16_t *region_colors = NULL;
+    if (arguments[ARG_REGIONS] != mp_const_none) {
+        mp_obj_t *region_objects;
+        mp_obj_get_array(arguments[ARG_REGIONS], &region_count, &region_objects);
+        region_limits = m_new(mp_float_t, region_count);
+        region_colors = m_new(uint16_t, region_count);
+        for (size_t index = 0; index < region_count; ++index) {
+            size_t item_count;
+            mp_obj_t *item_values;
+            mp_obj_get_array(region_objects[index], &item_count, &item_values);
+            if (item_count != 2) {
+                mp_raise_ValueError(MP_ERROR_TEXT("region must contain limit and color"));
+            }
+            region_limits[index] = mp_obj_get_float(item_values[0]);
+            region_colors[index] = (uint16_t)mp_obj_get_int(item_values[1]);
+        }
+    }
+    const int local_bottom = chart_y + chart_height - 1 - origin_y;
+    bool has_previous = false;
+    int previous_x = 0;
+    int previous_y = 0;
+    for (int offset_x = 0; offset_x < chart_width; ++offset_x) {
+        const size_t scaled = chart_width > 1
+            ? (size_t)offset_x * (value_count - 1) : 0;
+        const size_t divisor = chart_width > 1 ? (size_t)(chart_width - 1) : 1;
+        size_t left_index = scaled / divisor;
+        if (left_index >= value_count - 1) {
+            left_index = value_count - 1;
+        }
+        const size_t right_index = left_index + 1 < value_count
+            ? left_index + 1 : left_index;
+        const size_t remainder = scaled % divisor;
+        const mp_float_t left_value = chart_values[left_index];
+        const mp_float_t right_value = chart_values[right_index];
+        mp_float_t value = left_value + (right_value - left_value)
+            * (mp_float_t)remainder / (mp_float_t)divisor;
+        if (value < 0) {
+            value = 0;
+        }
+        if (value > maximum) {
+            value = maximum;
+        }
+        const int x = chart_x + offset_x - origin_x;
+        const int y = chart_y + chart_height - 1 - origin_y
+            - (int)(value * (chart_height - 1) / maximum);
+        uint16_t color = default_color;
+        if (color_callback != mp_const_none) {
+            if (color_cache_step > 0) {
+                const int cache_bucket = (int)(value / color_cache_step);
+                const mp_obj_t cache_key = mp_obj_new_int(cache_bucket);
+                mp_map_elem_t *cached = mp_map_lookup(
+                    &color_cache->map, cache_key, MP_MAP_LOOKUP);
+                if (cached == NULL) {
+                    const mp_obj_t callback_value = mp_obj_new_float(value);
+                    color = (uint16_t)mp_obj_get_int(mp_call_function_1(
+                        color_callback, callback_value));
+                    cached = mp_map_lookup(
+                        &color_cache->map, cache_key,
+                        MP_MAP_LOOKUP_ADD_IF_NOT_FOUND);
+                    cached->value = mp_obj_new_int_from_uint(color);
+                } else {
+                    color = (uint16_t)mp_obj_get_int(cached->value);
+                }
+            } else {
+                color = (uint16_t)mp_obj_get_int(mp_call_function_1(
+                    color_callback, mp_obj_new_float(value)));
+            }
+        } else {
+            for (size_t index = 0; index < region_count; ++index) {
+                if (value < region_limits[index]) {
+                    color = region_colors[index];
+                    break;
+                }
+            }
+        }
+        if (filled) {
+            int top = y < 0 ? 0 : y;
+            int bottom = local_bottom >= canvas_height
+                ? canvas_height - 1 : local_bottom;
+            if (x >= 0 && x < canvas_width && top <= bottom && bottom >= 0
+                && top < canvas_height) {
+                fn_canvas_fill_local(buffer, canvas_width, x, top, x + 1,
+                    bottom + 1, color);
+            }
+        } else if (has_previous) {
+            fn_canvas_line_local(buffer, canvas_width, canvas_height,
+                previous_x, previous_y, x, y, color);
+        } else {
+            fn_canvas_pixel_local(buffer, canvas_width, canvas_height, x, y, color);
+        }
+        previous_x = x;
+        previous_y = y;
+        has_previous = true;
+    }
+    if (region_count > 0) {
+        m_del(uint16_t, region_colors, region_count);
+        m_del(mp_float_t, region_limits, region_count);
+    }
+    m_del(mp_float_t, chart_values, value_count);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+    fn_canvas_draw_line_chart_obj, 19, 19, fn_canvas_draw_line_chart);
+
 static const mp_rom_map_elem_t fn_canvas_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_fn_canvas)},
     {MP_ROM_QSTR(MP_QSTR_API_VERSION), MP_ROM_INT(FN_CANVAS_API_VERSION)},
@@ -392,6 +562,7 @@ static const mp_rom_map_elem_t fn_canvas_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_draw_polyline), MP_ROM_PTR(&fn_canvas_draw_polyline_obj)},
     {MP_ROM_QSTR(MP_QSTR_fill_polygon), MP_ROM_PTR(&fn_canvas_fill_polygon_obj)},
     {MP_ROM_QSTR(MP_QSTR_draw_columns), MP_ROM_PTR(&fn_canvas_draw_columns_obj)},
+    {MP_ROM_QSTR(MP_QSTR_draw_line_chart), MP_ROM_PTR(&fn_canvas_draw_line_chart_obj)},
 };
 static MP_DEFINE_CONST_DICT(fn_canvas_module_globals, fn_canvas_module_globals_table);
 
