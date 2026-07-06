@@ -1,7 +1,6 @@
 name: stm32 port
 
 on:
-  push:
   pull_request:
     paths:
       - '.github/workflows/*.yml'
@@ -33,4 +32,3 @@ jobs:
       run: tools/ci.sh stm32_setup && tools/ci.sh stm32_path >> $GITHUB_PATH
     - name: Build ci_${{matrix.ci_func }}
       run: tools/ci.sh ${{ matrix.ci_func }}
-

@@ -1,6 +1,6 @@
 name: JavaScript code lint and formatting with Biome
 
-on: [push, pull_request]
+on: [pull_request]
 
 jobs:
   eslint:

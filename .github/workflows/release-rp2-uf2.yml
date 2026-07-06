@@ -66,4 +66,4 @@ jobs:
 
           gh release create "$TAG" "$FILE" \
             --title "$TAG" \
-            --notes "MicroPython RP2 UF2 firmware for ${BOARD}, with fn_canvas API v2."
+            --notes "MicroPython RP2 UF2 firmware for ${BOARD}, with fn_canvas API v3."

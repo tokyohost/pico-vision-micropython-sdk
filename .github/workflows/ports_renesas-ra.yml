@@ -1,7 +1,6 @@
 name: renesas-ra port
 
 on:
-  push:
   pull_request:
     paths:
       - '.github/workflows/*.yml'
@@ -26,4 +25,3 @@ jobs:
       run: tools/ci.sh renesas_ra_setup
     - name: Build
       run: tools/ci.sh renesas_ra_board_build
-

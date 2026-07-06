@@ -1,7 +1,6 @@
 name: zephyr port
 
 on:
-  push:
   pull_request:
     paths:
       - '.github/workflows/ports_zephyr.yml'
