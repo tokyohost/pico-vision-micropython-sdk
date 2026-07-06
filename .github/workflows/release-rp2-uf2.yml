@@ -14,7 +14,6 @@ jobs:
 
     env:
       BOARD: RPI_PICO
-      USER_C_MODULES: modules/fn_canvas/micropython.cmake;modules/fn_protocol/micropython.cmake
 
     steps:
       - name: Checkout source
@@ -36,7 +35,7 @@ jobs:
 
       - name: Build mpy-cross
         run: |
-          make -C mpy-cross
+          make -C mpy-cross USER_C_MODULES=
 
       - name: Prepare RP2 submodules
         run: |
@@ -45,7 +44,7 @@ jobs:
       - name: Build RP2 firmware
         run: |
           make -C ports/rp2 BOARD=${BOARD} \
-            USER_C_MODULES="${USER_C_MODULES}"
+            USER_C_MODULES=modules/micropython.cmake
 
       - name: Verify native modules are linked
         run: |
