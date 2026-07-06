@@ -7,12 +7,17 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "py/binary.h"
 #include "py/obj.h"
 #include "py/runtime.h"
 
-#define FN_CANVAS_API_VERSION (5)
+#define FN_CANVAS_API_VERSION (6)
+
+#define FN_CANVAS_COMMAND_FILL_RECT (0)
+#define FN_CANVAS_COMMAND_LINE (1)
+#define FN_CANVAS_COMMAND_DRAW_RECT (2)
 
 /** 获取可写画布缓冲区，并校验其容量。 */
 static uint8_t *fn_canvas_get_buffer(mp_obj_t object, size_t required_size) {
@@ -29,11 +34,32 @@ static void fn_canvas_fill_local(uint8_t *buffer, int canvas_width,
     int left, int top, int right, int bottom, uint16_t color) {
     const uint8_t high = (uint8_t)(color >> 8);
     const uint8_t low = (uint8_t)color;
+    const size_t row_bytes = (size_t)(right - left) * 2;
     for (int y = top; y < bottom; ++y) {
         uint8_t *pixel = buffer + ((y * canvas_width + left) * 2);
-        for (int x = left; x < right; ++x) {
+        if (high == low) {
+            memset(pixel, high, row_bytes);
+            continue;
+        }
+        if (((uintptr_t)pixel & 3U) != 0 && row_bytes >= 2) {
             *pixel++ = high;
             *pixel++ = low;
+        }
+        uint32_t *wide_pixel = (uint32_t *)pixel;
+        const uint32_t pair = (uint32_t)high
+            | ((uint32_t)low << 8)
+            | ((uint32_t)high << 16)
+            | ((uint32_t)low << 24);
+        size_t remaining = row_bytes - (size_t)(pixel
+            - (buffer + ((y * canvas_width + left) * 2)));
+        while (remaining >= 4) {
+            *wide_pixel++ = pair;
+            remaining -= 4;
+        }
+        pixel = (uint8_t *)wide_pixel;
+        if (remaining >= 2) {
+            pixel[0] = high;
+            pixel[1] = low;
         }
     }
 }
@@ -67,6 +93,32 @@ static inline void fn_canvas_pixel_local(uint8_t *buffer, int canvas_width,
 /** 使用与原 Canvas 一致的 Bresenham 规则绘制本地坐标线段。 */
 static void fn_canvas_line_local(uint8_t *buffer, int width, int height,
     int x0, int y0, int x1, int y1, uint16_t color) {
+    if (y0 == y1) {
+        if ((unsigned int)y0 >= (unsigned int)height) {
+            return;
+        }
+        int left = x0 < x1 ? x0 : x1;
+        int right = x0 < x1 ? x1 : x0;
+        left = left < 0 ? 0 : left;
+        right = right >= width ? width - 1 : right;
+        if (left <= right) {
+            fn_canvas_fill_local(buffer, width, left, y0, right + 1, y0 + 1, color);
+        }
+        return;
+    }
+    if (x0 == x1) {
+        if ((unsigned int)x0 >= (unsigned int)width) {
+            return;
+        }
+        int top = y0 < y1 ? y0 : y1;
+        int bottom = y0 < y1 ? y1 : y0;
+        top = top < 0 ? 0 : top;
+        bottom = bottom >= height ? height - 1 : bottom;
+        if (top <= bottom) {
+            fn_canvas_fill_local(buffer, width, x0, top, x0 + 1, bottom + 1, color);
+        }
+        return;
+    }
     const int delta_x = x0 < x1 ? x1 - x0 : x0 - x1;
     const int step_x = x0 < x1 ? 1 : -1;
     const int delta_y_abs = y0 < y1 ? y1 - y0 : y0 - y1;
@@ -88,6 +140,22 @@ static void fn_canvas_line_local(uint8_t *buffer, int width, int height,
             y0 += step_y;
         }
     }
+}
+
+/** 绘制已经换算为本地坐标并完成尺寸校验的矩形边框。 */
+static void fn_canvas_rect_local(uint8_t *buffer, int width, int height,
+    int x, int y, int rect_width, int rect_height, uint16_t color) {
+    if (rect_width <= 0 || rect_height <= 0) {
+        return;
+    }
+    fn_canvas_line_local(buffer, width, height, x, y,
+        x + rect_width - 1, y, color);
+    fn_canvas_line_local(buffer, width, height, x, y + rect_height - 1,
+        x + rect_width - 1, y + rect_height - 1, color);
+    fn_canvas_line_local(buffer, width, height, x, y,
+        x, y + rect_height - 1, color);
+    fn_canvas_line_local(buffer, width, height, x + rect_width - 1, y,
+        x + rect_width - 1, y + rect_height - 1, color);
 }
 
 /** 返回模块能力版本，供 Python 在运行时判断当前 UF2 是否支持加速。 */
@@ -182,17 +250,8 @@ static mp_obj_t fn_canvas_draw_rect(size_t argument_count, const mp_obj_t *argum
     const int width = mp_obj_get_int(arguments[7]);
     const int height = mp_obj_get_int(arguments[8]);
     const uint16_t color = (uint16_t)mp_obj_get_int(arguments[9]);
-    if (width <= 0 || height <= 0) {
-        return mp_const_none;
-    }
-    fn_canvas_line_local(buffer, canvas_width, canvas_height,
-        x, y, x + width - 1, y, color);
-    fn_canvas_line_local(buffer, canvas_width, canvas_height,
-        x, y + height - 1, x + width - 1, y + height - 1, color);
-    fn_canvas_line_local(buffer, canvas_width, canvas_height,
-        x, y, x, y + height - 1, color);
-    fn_canvas_line_local(buffer, canvas_width, canvas_height,
-        x + width - 1, y, x + width - 1, y + height - 1, color);
+    fn_canvas_rect_local(buffer, canvas_width, canvas_height,
+        x, y, width, height, color);
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
@@ -552,6 +611,123 @@ static mp_obj_t fn_canvas_draw_line_chart(size_t argument_count,
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
     fn_canvas_draw_line_chart_obj, 19, 19, fn_canvas_draw_line_chart);
 
+/** 使用 Python 字体列数据一次绘制整段透明背景文字。 */
+static mp_obj_t fn_canvas_draw_text(size_t argument_count,
+    const mp_obj_t *arguments) {
+    enum {
+        ARG_BUFFER, ARG_CANVAS_WIDTH, ARG_CANVAS_HEIGHT, ARG_ORIGIN_X,
+        ARG_ORIGIN_Y, ARG_FONT, ARG_FONT_KIND, ARG_X, ARG_Y, ARG_VALUE,
+        ARG_COLOR, ARG_SCALE,
+    };
+    (void)argument_count;
+    int width, height, origin_x, origin_y;
+    uint8_t *buffer = fn_canvas_parse_canvas(arguments, &width, &height,
+        &origin_x, &origin_y);
+    const int font_kind = mp_obj_get_int(arguments[ARG_FONT_KIND]);
+    int cursor_x = mp_obj_get_int(arguments[ARG_X]);
+    const int text_y = mp_obj_get_int(arguments[ARG_Y]);
+    const uint16_t color = (uint16_t)mp_obj_get_int(arguments[ARG_COLOR]);
+    const int scale = mp_obj_get_int(arguments[ARG_SCALE]);
+    if (scale <= 0) {
+        mp_raise_ValueError(MP_ERROR_TEXT("text scale must be positive"));
+    }
+    mp_map_t *font = mp_obj_dict_get_map(arguments[ARG_FONT]);
+    const mp_obj_t fallback_character = mp_obj_new_str("?", 1);
+    mp_obj_iter_buf_t iterator_buffer;
+    mp_obj_t iterator = mp_getiter(arguments[ARG_VALUE], &iterator_buffer);
+    mp_obj_t character;
+    while ((character = mp_iternext(iterator)) != MP_OBJ_STOP_ITERATION) {
+        mp_map_elem_t *glyph_entry = mp_map_lookup(font, character, MP_MAP_LOOKUP);
+        if (glyph_entry == NULL) {
+            glyph_entry = mp_map_lookup(font, fallback_character, MP_MAP_LOOKUP);
+        }
+        if (glyph_entry == NULL) {
+            continue;
+        }
+        size_t column_count;
+        mp_obj_t *columns;
+        mp_obj_get_array(glyph_entry->value, &column_count, &columns);
+        const int offset = font_kind == 1 && scale == 1 ? 1 : 0;
+        for (size_t column = 0; column < column_count; ++column) {
+            const int bits = mp_obj_get_int(columns[column]);
+            for (int row = 0; row < 7; ++row) {
+                if ((bits & (1 << row)) != 0) {
+                    int left = cursor_x + offset + (int)column * scale - origin_x;
+                    int top = text_y + row * scale - origin_y;
+                    int right = left + scale;
+                    int bottom = top + scale;
+                    left = left < 0 ? 0 : left;
+                    top = top < 0 ? 0 : top;
+                    right = right > width ? width : right;
+                    bottom = bottom > height ? height : bottom;
+                    if (left < right && top < bottom) {
+                        fn_canvas_fill_local(buffer, width, left, top,
+                            right, bottom, color);
+                    }
+                }
+            }
+        }
+        int advance = (int)column_count + 1;
+        if (font_kind == 0 || (font_kind == 1 && scale > 1)) {
+            advance = advance < 6 ? 6 : advance;
+        } else if (font_kind == 1 && scale == 1) {
+            advance = advance < 8 ? 8 : advance;
+        }
+        cursor_x += advance * scale;
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+    fn_canvas_draw_text_obj, 12, 12, fn_canvas_draw_text);
+
+/** 一次解析并执行矩形填充、线段和矩形边框命令序列。 */
+static mp_obj_t fn_canvas_draw_commands(size_t argument_count,
+    const mp_obj_t *arguments) {
+    (void)argument_count;
+    int width, height, origin_x, origin_y;
+    uint8_t *buffer = fn_canvas_parse_canvas(arguments, &width, &height,
+        &origin_x, &origin_y);
+    mp_obj_iter_buf_t iterator_buffer;
+    mp_obj_t iterator = mp_getiter(arguments[5], &iterator_buffer);
+    mp_obj_t command;
+    while ((command = mp_iternext(iterator)) != MP_OBJ_STOP_ITERATION) {
+        size_t count;
+        mp_obj_t *values;
+        mp_obj_get_array(command, &count, &values);
+        if (count != 6) {
+            mp_raise_ValueError(MP_ERROR_TEXT("draw command must contain 6 values"));
+        }
+        const int operation = mp_obj_get_int(values[0]);
+        const int x = mp_obj_get_int(values[1]) - origin_x;
+        const int y = mp_obj_get_int(values[2]) - origin_y;
+        const int value_a = mp_obj_get_int(values[3]);
+        const int value_b = mp_obj_get_int(values[4]);
+        const uint16_t color = (uint16_t)mp_obj_get_int(values[5]);
+        if (operation == FN_CANVAS_COMMAND_FILL_RECT) {
+            int left = x < 0 ? 0 : x;
+            int top = y < 0 ? 0 : y;
+            int right = x + value_a;
+            int bottom = y + value_b;
+            right = right > width ? width : right;
+            bottom = bottom > height ? height : bottom;
+            if (left < right && top < bottom) {
+                fn_canvas_fill_local(buffer, width, left, top, right, bottom, color);
+            }
+        } else if (operation == FN_CANVAS_COMMAND_LINE) {
+            fn_canvas_line_local(buffer, width, height, x, y,
+                value_a - origin_x, value_b - origin_y, color);
+        } else if (operation == FN_CANVAS_COMMAND_DRAW_RECT) {
+            fn_canvas_rect_local(buffer, width, height,
+                x, y, value_a, value_b, color);
+        } else {
+            mp_raise_ValueError(MP_ERROR_TEXT("unknown draw command"));
+        }
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+    fn_canvas_draw_commands_obj, 6, 6, fn_canvas_draw_commands);
+
 static const mp_rom_map_elem_t fn_canvas_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_fn_canvas)},
     {MP_ROM_QSTR(MP_QSTR_API_VERSION), MP_ROM_INT(FN_CANVAS_API_VERSION)},
@@ -566,6 +742,8 @@ static const mp_rom_map_elem_t fn_canvas_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_fill_polygon), MP_ROM_PTR(&fn_canvas_fill_polygon_obj)},
     {MP_ROM_QSTR(MP_QSTR_draw_columns), MP_ROM_PTR(&fn_canvas_draw_columns_obj)},
     {MP_ROM_QSTR(MP_QSTR_draw_line_chart), MP_ROM_PTR(&fn_canvas_draw_line_chart_obj)},
+    {MP_ROM_QSTR(MP_QSTR_draw_text), MP_ROM_PTR(&fn_canvas_draw_text_obj)},
+    {MP_ROM_QSTR(MP_QSTR_draw_commands), MP_ROM_PTR(&fn_canvas_draw_commands_obj)},
 };
 static MP_DEFINE_CONST_DICT(fn_canvas_module_globals, fn_canvas_module_globals_table);
 
