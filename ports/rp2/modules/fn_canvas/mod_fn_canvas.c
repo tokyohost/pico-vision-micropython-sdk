@@ -12,7 +12,7 @@
 #include "py/obj.h"
 #include "py/runtime.h"
 
-#define FN_CANVAS_API_VERSION (2)
+#define FN_CANVAS_API_VERSION (3)
 
 /** 获取可写画布缓冲区，并校验其容量。 */
 static uint8_t *fn_canvas_get_buffer(mp_obj_t object, size_t required_size) {
@@ -62,6 +62,32 @@ static inline void fn_canvas_pixel_local(uint8_t *buffer, int canvas_width,
     uint8_t *pixel = buffer + ((y * canvas_width + x) * 2);
     pixel[0] = (uint8_t)(color >> 8);
     pixel[1] = (uint8_t)color;
+}
+
+/** 使用与原 Canvas 一致的 Bresenham 规则绘制本地坐标线段。 */
+static void fn_canvas_line_local(uint8_t *buffer, int width, int height,
+    int x0, int y0, int x1, int y1, uint16_t color) {
+    const int delta_x = x0 < x1 ? x1 - x0 : x0 - x1;
+    const int step_x = x0 < x1 ? 1 : -1;
+    const int delta_y_abs = y0 < y1 ? y1 - y0 : y0 - y1;
+    const int delta_y = -delta_y_abs;
+    const int step_y = y0 < y1 ? 1 : -1;
+    int error = delta_x + delta_y;
+    for (;;) {
+        fn_canvas_pixel_local(buffer, width, height, x0, y0, color);
+        if (x0 == x1 && y0 == y1) {
+            break;
+        }
+        const int doubled = error * 2;
+        if (doubled >= delta_y) {
+            error += delta_y;
+            x0 += step_x;
+        }
+        if (doubled <= delta_x) {
+            error += delta_x;
+            y0 += step_y;
+        }
+    }
 }
 
 /** 返回模块能力版本，供 Python 在运行时判断当前 UF2 是否支持加速。 */
@@ -140,30 +166,99 @@ static mp_obj_t fn_canvas_line(size_t argument_count, const mp_obj_t *arguments)
     const int x1 = mp_obj_get_int(arguments[7]) - origin_x;
     const int y1 = mp_obj_get_int(arguments[8]) - origin_y;
     const uint16_t color = (uint16_t)mp_obj_get_int(arguments[9]);
-    const int delta_x = x0 < x1 ? x1 - x0 : x0 - x1;
-    const int step_x = x0 < x1 ? 1 : -1;
-    const int delta_y_abs = y0 < y1 ? y1 - y0 : y0 - y1;
-    const int delta_y = -delta_y_abs;
-    const int step_y = y0 < y1 ? 1 : -1;
-    int error = delta_x + delta_y;
-    for (;;) {
-        fn_canvas_pixel_local(buffer, width, height, x0, y0, color);
-        if (x0 == x1 && y0 == y1) {
-            break;
-        }
-        const int doubled = error * 2;
-        if (doubled >= delta_y) {
-            error += delta_y;
-            x0 += step_x;
-        }
-        if (doubled <= delta_x) {
-            error += delta_x;
-            y0 += step_y;
+    fn_canvas_line_local(buffer, width, height, x0, y0, x1, y1, color);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(fn_canvas_line_obj, 10, 10, fn_canvas_line);
+
+/** 按原样式的上、下、左、右顺序一次绘制矩形边框。 */
+static mp_obj_t fn_canvas_draw_rect(size_t argument_count, const mp_obj_t *arguments) {
+    (void)argument_count;
+    int canvas_width, canvas_height, origin_x, origin_y;
+    uint8_t *buffer = fn_canvas_parse_canvas(arguments, &canvas_width,
+        &canvas_height, &origin_x, &origin_y);
+    const int x = mp_obj_get_int(arguments[5]) - origin_x;
+    const int y = mp_obj_get_int(arguments[6]) - origin_y;
+    const int width = mp_obj_get_int(arguments[7]);
+    const int height = mp_obj_get_int(arguments[8]);
+    const uint16_t color = (uint16_t)mp_obj_get_int(arguments[9]);
+    if (width <= 0 || height <= 0) {
+        return mp_const_none;
+    }
+    fn_canvas_line_local(buffer, canvas_width, canvas_height,
+        x, y, x + width - 1, y, color);
+    fn_canvas_line_local(buffer, canvas_width, canvas_height,
+        x, y + height - 1, x + width - 1, y + height - 1, color);
+    fn_canvas_line_local(buffer, canvas_width, canvas_height,
+        x, y, x, y + height - 1, color);
+    fn_canvas_line_local(buffer, canvas_width, canvas_height,
+        x + width - 1, y, x + width - 1, y + height - 1, color);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+    fn_canvas_draw_rect_obj, 10, 10, fn_canvas_draw_rect);
+
+/** 一次调用绘制规则点阵网格，减少 Python 与 C 的跨层调用。 */
+static mp_obj_t fn_canvas_draw_grid(size_t argument_count, const mp_obj_t *arguments) {
+    (void)argument_count;
+    int canvas_width, canvas_height, origin_x, origin_y;
+    uint8_t *buffer = fn_canvas_parse_canvas(arguments, &canvas_width,
+        &canvas_height, &origin_x, &origin_y);
+    const int x = mp_obj_get_int(arguments[5]);
+    const int y = mp_obj_get_int(arguments[6]);
+    const int width = mp_obj_get_int(arguments[7]);
+    const int height = mp_obj_get_int(arguments[8]);
+    const int step_x = mp_obj_get_int(arguments[9]);
+    const int step_y = mp_obj_get_int(arguments[10]);
+    const uint16_t color = (uint16_t)mp_obj_get_int(arguments[11]);
+    if (step_x <= 0 || step_y <= 0) {
+        mp_raise_ValueError(MP_ERROR_TEXT("grid step must be positive"));
+    }
+    for (int point_x = x; point_x < x + width; point_x += step_x) {
+        for (int point_y = y; point_y < y + height; point_y += step_y) {
+            fn_canvas_pixel_local(buffer, canvas_width, canvas_height,
+                point_x - origin_x, point_y - origin_y, color);
         }
     }
     return mp_const_none;
 }
-static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(fn_canvas_line_obj, 10, 10, fn_canvas_line);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+    fn_canvas_draw_grid_obj, 12, 12, fn_canvas_draw_grid);
+
+/** 批量连接 Python 已计算好的坐标点，确保缩放和取整效果完全不变。 */
+static mp_obj_t fn_canvas_draw_polyline(size_t argument_count, const mp_obj_t *arguments) {
+    (void)argument_count;
+    int width, height, origin_x, origin_y;
+    uint8_t *buffer = fn_canvas_parse_canvas(arguments, &width, &height,
+        &origin_x, &origin_y);
+    const uint16_t color = (uint16_t)mp_obj_get_int(arguments[6]);
+    mp_obj_iter_buf_t iterator_buffer;
+    mp_obj_t iterator = mp_getiter(arguments[5], &iterator_buffer);
+    mp_obj_t item;
+    bool has_previous = false;
+    int previous_x = 0;
+    int previous_y = 0;
+    while ((item = mp_iternext(iterator)) != MP_OBJ_STOP_ITERATION) {
+        size_t coordinate_count;
+        mp_obj_t *coordinates;
+        mp_obj_get_array(item, &coordinate_count, &coordinates);
+        if (coordinate_count != 2) {
+            mp_raise_ValueError(MP_ERROR_TEXT("point must contain x and y"));
+        }
+        const int current_x = mp_obj_get_int(coordinates[0]) - origin_x;
+        const int current_y = mp_obj_get_int(coordinates[1]) - origin_y;
+        if (has_previous) {
+            fn_canvas_line_local(buffer, width, height,
+                previous_x, previous_y, current_x, current_y, color);
+        }
+        previous_x = current_x;
+        previous_y = current_y;
+        has_previous = true;
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+    fn_canvas_draw_polyline_obj, 7, 7, fn_canvas_draw_polyline);
 
 /** 使用偶奇扫描线规则填充任意简单多边形。 */
 static mp_obj_t fn_canvas_fill_polygon(size_t argument_count, const mp_obj_t *arguments) {
@@ -292,6 +387,9 @@ static const mp_rom_map_elem_t fn_canvas_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_pixel), MP_ROM_PTR(&fn_canvas_pixel_obj)},
     {MP_ROM_QSTR(MP_QSTR_fill_rect), MP_ROM_PTR(&fn_canvas_fill_rect_obj)},
     {MP_ROM_QSTR(MP_QSTR_line), MP_ROM_PTR(&fn_canvas_line_obj)},
+    {MP_ROM_QSTR(MP_QSTR_draw_rect), MP_ROM_PTR(&fn_canvas_draw_rect_obj)},
+    {MP_ROM_QSTR(MP_QSTR_draw_grid), MP_ROM_PTR(&fn_canvas_draw_grid_obj)},
+    {MP_ROM_QSTR(MP_QSTR_draw_polyline), MP_ROM_PTR(&fn_canvas_draw_polyline_obj)},
     {MP_ROM_QSTR(MP_QSTR_fill_polygon), MP_ROM_PTR(&fn_canvas_fill_polygon_obj)},
     {MP_ROM_QSTR(MP_QSTR_draw_columns), MP_ROM_PTR(&fn_canvas_draw_columns_obj)},
 };
