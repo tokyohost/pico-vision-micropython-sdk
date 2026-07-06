@@ -1,0 +1,63 @@
+name: Release RP2 UF2
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    env:
+      BOARD: RPI_PICO
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            cmake \
+            pkg-config \
+            python3 \
+            gcc-arm-none-eabi \
+            libnewlib-arm-none-eabi
+
+      - name: Build mpy-cross
+        run: |
+          make -C mpy-cross
+
+      - name: Prepare RP2 submodules
+        run: |
+          make -C ports/rp2 submodules
+
+      - name: Build RP2 firmware
+        run: |
+          make -C ports/rp2 BOARD=${BOARD}
+
+      - name: Prepare release files
+        run: |
+          mkdir -p dist
+          cp ports/rp2/build-${BOARD}/firmware.uf2 dist/micropython-${BOARD}-${GITHUB_REF_NAME}.uf2
+          ls -lh dist
+
+      - name: Create GitHub Release and upload UF2
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          FILE="dist/micropython-${BOARD}-${TAG}.uf2"
+
+          gh release create "$TAG" "$FILE" \
+            --title "$TAG" \
+            --notes "MicroPython RP2 UF2 firmware for ${BOARD}."
