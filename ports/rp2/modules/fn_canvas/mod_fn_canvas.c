@@ -10,7 +10,6 @@
 
 #include "py/binary.h"
 #include "py/obj.h"
-#include "py/objdict.h"
 #include "py/runtime.h"
 
 #define FN_CANVAS_API_VERSION (5)
@@ -441,8 +440,12 @@ static mp_obj_t fn_canvas_draw_line_chart(size_t argument_count,
     const mp_obj_t color_callback = arguments[ARG_COLOR_CALLBACK];
     const mp_float_t color_cache_step = mp_obj_get_float(
         arguments[ARG_COLOR_CACHE_STEP]);
-    mp_obj_t color_cache_object = mp_obj_new_dict(0);
-    mp_obj_dict_t *color_cache = MP_OBJ_TO_PTR(color_cache_object);
+    volatile mp_obj_t color_cache_object = mp_const_none;
+    mp_map_t *color_cache = NULL;
+    if (color_callback != mp_const_none && color_cache_step > 0) {
+        color_cache_object = mp_obj_new_dict(0);
+        color_cache = mp_obj_dict_get_map(color_cache_object);
+    }
     size_t region_count = 0;
     mp_float_t *region_limits = NULL;
     uint16_t *region_colors = NULL;
@@ -496,13 +499,13 @@ static mp_obj_t fn_canvas_draw_line_chart(size_t argument_count,
                 const int cache_bucket = (int)(value / color_cache_step);
                 const mp_obj_t cache_key = mp_obj_new_int(cache_bucket);
                 mp_map_elem_t *cached = mp_map_lookup(
-                    &color_cache->map, cache_key, MP_MAP_LOOKUP);
+                    color_cache, cache_key, MP_MAP_LOOKUP);
                 if (cached == NULL) {
                     const mp_obj_t callback_value = mp_obj_new_float(value);
                     color = (uint16_t)mp_obj_get_int(mp_call_function_1(
                         color_callback, callback_value));
                     cached = mp_map_lookup(
-                        &color_cache->map, cache_key,
+                        color_cache, cache_key,
                         MP_MAP_LOOKUP_ADD_IF_NOT_FOUND);
                     cached->value = mp_obj_new_int_from_uint(color);
                 } else {
