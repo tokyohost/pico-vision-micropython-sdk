@@ -14,6 +14,7 @@ jobs:
 
     env:
       BOARD: RPI_PICO
+      USER_C_MODULES: modules/fn_canvas/micropython.cmake;modules/fn_protocol/micropython.cmake
 
     steps:
       - name: Checkout source
@@ -44,11 +45,13 @@ jobs:
       - name: Build RP2 firmware
         run: |
           make -C ports/rp2 BOARD=${BOARD} \
-            USER_C_MODULES=modules/fn_canvas/micropython.cmake
+            USER_C_MODULES="${USER_C_MODULES}"
 
-      - name: Verify fn_canvas module is linked
+      - name: Verify native modules are linked
         run: |
           grep -q "MP_QSTR_fn_canvas" \
+            ports/rp2/build-${BOARD}/genhdr/qstrdefs.generated.h
+          grep -q "MP_QSTR_fn_protocol" \
             ports/rp2/build-${BOARD}/genhdr/qstrdefs.generated.h
 
       - name: Prepare release files
@@ -66,4 +69,4 @@ jobs:
 
           gh release create "$TAG" "$FILE" \
             --title "$TAG" \
-            --notes "MicroPython RP2 UF2 firmware for ${BOARD}, with fn_canvas API v3."
+            --notes "MicroPython RP2 UF2 firmware for ${BOARD}, with fn_canvas API v3 and fn_protocol API v1."
