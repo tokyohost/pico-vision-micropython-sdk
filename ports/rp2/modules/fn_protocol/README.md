@@ -2,7 +2,8 @@
 
 `fn_protocol` 是 fn-vision 面向 MicroPython RP2 固件的 PV1 原生解析模块。
 当前接口版本为 `1`，负责帧头、长度、尾部填充、CRC-16/CCITT-FALSE 和消息类型校验。
-JSON 解压、解析及业务分发仍由 Python 完成。
+JSON 解压、解析及业务分发仍由 Python 完成。模块不依赖芯片专用外设，可同时编译到
+RP2040 的 `RPI_PICO` 和 RP2350 的 `RPI_PICO2` 固件。
 
 建议与 `fn_canvas` 一起构建：
 

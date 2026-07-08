@@ -12,8 +12,15 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        board:
+          - RPI_PICO
+          - RPI_PICO2
+
     env:
-      BOARD: RPI_PICO
+      BOARD: ${{ matrix.board }}
 
     steps:
       - name: Checkout source
@@ -59,13 +66,37 @@ jobs:
           cp ports/rp2/build-${BOARD}/firmware.uf2 dist/micropython-${BOARD}-${GITHUB_REF_NAME}.uf2
           ls -lh dist
 
-      - name: Create GitHub Release and upload UF2
+      - name: Upload UF2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: micropython-${{ env.BOARD }}-${{ github.ref_name }}
+          path: dist/*.uf2
+          if-no-files-found: error
+
+  release:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all UF2 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: micropython-*-${{ github.ref_name }}
+          path: dist
+          merge-multiple: true
+
+      - name: Verify release files
+        run: |
+          test -f "dist/micropython-RPI_PICO-${GITHUB_REF_NAME}.uf2"
+          test -f "dist/micropython-RPI_PICO2-${GITHUB_REF_NAME}.uf2"
+          ls -lh dist
+
+      - name: Create GitHub Release and upload UF2 files
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
-          FILE="dist/micropython-${BOARD}-${TAG}.uf2"
 
-          gh release create "$TAG" "$FILE" \
+          gh release create "$TAG" dist/*.uf2 \
             --title "$TAG" \
-            --notes "MicroPython RP2 UF2 firmware for ${BOARD}, with fn_canvas API v3 and fn_protocol API v1."
+            --notes "MicroPython RP2 UF2 firmware for RP2040 (RPI_PICO) and RP2350 (RPI_PICO2), with fn_canvas API v7 and fn_protocol API v1."

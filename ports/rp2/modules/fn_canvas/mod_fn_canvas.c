@@ -29,6 +29,15 @@ static uint8_t *fn_canvas_get_buffer(mp_obj_t object, size_t required_size) {
     return (uint8_t *)buffer.buf;
 }
 
+/** 校验画布尺寸并计算 RGB565 缓冲区所需字节数，防止整数乘法溢出。 */
+static size_t fn_canvas_buffer_size(int width, int height) {
+    if (width <= 0 || height <= 0
+        || (size_t)width > SIZE_MAX / (size_t)height / 2U) {
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid canvas size"));
+    }
+    return (size_t)width * (size_t)height * 2U;
+}
+
 /** 在已完成边界裁剪的本地坐标内写入 RGB565 实心矩形。 */
 static void fn_canvas_fill_local(uint8_t *buffer, int canvas_width,
     int left, int top, int right, int bottom, uint16_t color) {
@@ -41,22 +50,31 @@ static void fn_canvas_fill_local(uint8_t *buffer, int canvas_width,
             memset(pixel, high, row_bytes);
             continue;
         }
-        if (((uintptr_t)pixel & 3U) != 0 && row_bytes >= 2) {
+        if (((uintptr_t)pixel & 3U) == 2U && row_bytes >= 2) {
             *pixel++ = high;
             *pixel++ = low;
         }
-        uint32_t *wide_pixel = (uint32_t *)pixel;
         const uint32_t pair = (uint32_t)high
             | ((uint32_t)low << 8)
             | ((uint32_t)high << 16)
             | ((uint32_t)low << 24);
         size_t remaining = row_bytes - (size_t)(pixel
             - (buffer + ((y * canvas_width + left) * 2)));
-        while (remaining >= 4) {
-            *wide_pixel++ = pair;
-            remaining -= 4;
+        if (((uintptr_t)pixel & 3U) == 0U) {
+            uint32_t *wide_pixel = (uint32_t *)pixel;
+            while (remaining >= 4) {
+                *wide_pixel++ = pair;
+                remaining -= 4;
+            }
+            pixel = (uint8_t *)wide_pixel;
+        } else {
+            /* bytearray 切片可能产生奇地址；RP2350 RISC-V 不允许非对齐字写入。 */
+            while (remaining >= 2) {
+                *pixel++ = high;
+                *pixel++ = low;
+                remaining -= 2;
+            }
         }
-        pixel = (uint8_t *)wide_pixel;
         if (remaining >= 2) {
             pixel[0] = high;
             pixel[1] = low;
@@ -71,11 +89,8 @@ static uint8_t *fn_canvas_parse_canvas(const mp_obj_t *arguments,
     *canvas_height = mp_obj_get_int(arguments[2]);
     *origin_x = mp_obj_get_int(arguments[3]);
     *origin_y = mp_obj_get_int(arguments[4]);
-    if (*canvas_width <= 0 || *canvas_height <= 0) {
-        mp_raise_ValueError(MP_ERROR_TEXT("invalid canvas size"));
-    }
     return fn_canvas_get_buffer(arguments[0],
-        (size_t)*canvas_width * *canvas_height * 2);
+        fn_canvas_buffer_size(*canvas_width, *canvas_height));
 }
 
 /** 在画布边界内写入单个本地坐标像素。 */
@@ -417,8 +432,8 @@ static mp_obj_t fn_canvas_draw_columns(size_t argument_count, const mp_obj_t *ar
     const int canvas_height = mp_obj_get_int(arguments[ARG_CANVAS_HEIGHT]);
     const int origin_x = mp_obj_get_int(arguments[ARG_ORIGIN_X]);
     const int origin_y = mp_obj_get_int(arguments[ARG_ORIGIN_Y]);
-    uint8_t *buffer = fn_canvas_get_buffer(
-        arguments[ARG_BUFFER], (size_t)canvas_width * canvas_height * 2);
+    uint8_t *buffer = fn_canvas_get_buffer(arguments[ARG_BUFFER],
+        fn_canvas_buffer_size(canvas_width, canvas_height));
 
     const bool has_bottom = arguments[ARG_BOTTOM] != mp_const_none;
     const int bottom = has_bottom ? mp_obj_get_int(arguments[ARG_BOTTOM]) : 0;
