@@ -62,6 +62,9 @@ extern TaskHandle_t mp_main_task_handle;
 
 extern ringbuf_t stdin_ringbuf;
 
+// ESP32 标准输入支持轮询后批量读取当前已有字节。
+#define MICROPY_HAL_HAS_STDIO_NONBLOCKING_READ (1)
+
 extern portMUX_TYPE mp_atomic_mux;
 
 // Check the ESP-IDF error code and raise an OSError if it's not ESP_OK.

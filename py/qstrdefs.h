@@ -64,6 +64,7 @@ Q(<setcomp>)
 Q(<genexpr>)
 Q(<string>)
 Q(<stdin>)
+Q(readinto_nonblocking)
 Q(utf-8)
 
 #if MICROPY_MODULE_FROZEN

@@ -1,4 +1,4 @@
-﻿# ULP
+# ULP
 
 To compile binarys for the ulp you need the ulp toolkit. Download it from https://github.com/espressif/binutils-esp32ulp/wiki#downloads
 Then extract it, then add ```esp32ulp-elf-binutils/bin``` to your PATH

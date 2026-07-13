@@ -21,6 +21,8 @@
     "url": "https://www.espressif.com/en/products/modules",
     "vendor": "Espressif",
     "variants": {
+        "N8R8": "8MiB Flash 与 8MiB Octal-SPIRAM",
+        "N16R8": "16MiB Flash 与 8MiB Octal-SPIRAM",
         "SPIRAM_OCT": "Support for Octal-SPIRAM"
     },
     "old_variants": {

@@ -12,8 +12,16 @@ jobs:
   build-esp32-s3:
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        board_variant:
+          - N8R8
+          - N16R8
+
     env:
       BOARD: ESP32_GENERIC_S3
+      BOARD_VARIANT: ${{ matrix.board_variant }}
 
     steps:
       - name: 检出源代码
@@ -29,7 +37,7 @@ jobs:
         uses: ./.github/actions/setup_esp32
         with:
           idf_ver: ${{ steps.idf_ver.outputs.IDF_VER }}
-          ccache_key: fn-vision-esp32-s3-release
+          ccache_key: fn-vision-esp32-s3-${{ matrix.board_variant }}-release
 
       - name: 构建 mpy-cross
         run: |
@@ -38,36 +46,36 @@ jobs:
       - name: 准备 ESP32 子模块
         run: |
           source esp-idf/export.sh
-          make -C ports/esp32 submodules BOARD=${BOARD}
+          make -C ports/esp32 submodules BOARD=${BOARD} BOARD_VARIANT=${BOARD_VARIANT}
 
       - name: 构建 ESP32-S3 固件
         run: |
           source esp-idf/export.sh
-          make -C ports/esp32 BOARD=${BOARD} \
+          make -C ports/esp32 BOARD=${BOARD} BOARD_VARIANT=${BOARD_VARIANT} \
             USER_C_MODULES="${GITHUB_WORKSPACE}/ports/esp32/usermod/micropython.cmake"
 
       - name: 校验 ESP32-S3 原生模块
         run: |
           grep -q "MP_QSTR_fn_canvas" \
-            ports/esp32/build-${BOARD}/genhdr/qstrdefs.generated.h
+            ports/esp32/build-${BOARD}-${BOARD_VARIANT}/genhdr/qstrdefs.generated.h
           grep -q "MP_QSTR_fn_protocol" \
-            ports/esp32/build-${BOARD}/genhdr/qstrdefs.generated.h
-          test -s "ports/esp32/build-${BOARD}/firmware.bin"
-          test -s "ports/esp32/build-${BOARD}/micropython.uf2"
+            ports/esp32/build-${BOARD}-${BOARD_VARIANT}/genhdr/qstrdefs.generated.h
+          test -s "ports/esp32/build-${BOARD}-${BOARD_VARIANT}/firmware.bin"
+          test -s "ports/esp32/build-${BOARD}-${BOARD_VARIANT}/micropython.uf2"
 
       - name: 整理 ESP32-S3 发布文件
         run: |
           mkdir -p dist
-          cp ports/esp32/build-${BOARD}/firmware.bin \
-            dist/micropython-${BOARD}-${GITHUB_REF_NAME}.bin
-          cp ports/esp32/build-${BOARD}/micropython.uf2 \
-            dist/micropython-${BOARD}-${GITHUB_REF_NAME}.uf2
+          cp ports/esp32/build-${BOARD}-${BOARD_VARIANT}/firmware.bin \
+            dist/micropython-${BOARD}-${BOARD_VARIANT}-${GITHUB_REF_NAME}.bin
+          cp ports/esp32/build-${BOARD}-${BOARD_VARIANT}/micropython.uf2 \
+            dist/micropython-${BOARD}-${BOARD_VARIANT}-${GITHUB_REF_NAME}.uf2
           ls -lh dist
 
       - name: 上传 ESP32-S3 构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: micropython-${{ env.BOARD }}-${{ github.ref_name }}
+          name: micropython-${{ env.BOARD }}-${{ matrix.board_variant }}-${{ github.ref_name }}
           path: |
             dist/*.bin
             dist/*.uf2
@@ -91,8 +99,10 @@ jobs:
 
       - name: 校验 ESP32-S3 发布文件
         run: |
-          test -f "dist/micropython-ESP32_GENERIC_S3-${GITHUB_REF_NAME}.bin"
-          test -f "dist/micropython-ESP32_GENERIC_S3-${GITHUB_REF_NAME}.uf2"
+          test -f "dist/micropython-ESP32_GENERIC_S3-N8R8-${GITHUB_REF_NAME}.bin"
+          test -f "dist/micropython-ESP32_GENERIC_S3-N8R8-${GITHUB_REF_NAME}.uf2"
+          test -f "dist/micropython-ESP32_GENERIC_S3-N16R8-${GITHUB_REF_NAME}.bin"
+          test -f "dist/micropython-ESP32_GENERIC_S3-N16R8-${GITHUB_REF_NAME}.uf2"
           ls -lh dist
 
       - name: 发布 ESP32-S3 固件
@@ -105,7 +115,7 @@ jobs:
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --title "$TAG" \
-              --notes "内置 fn_canvas API v7 与 fn_protocol API v1 的 MicroPython 固件。"
+              --notes "适用于 ESP32-S3 N8R8 与 N16R8，内置 fn_canvas API v7 与 fn_protocol API v1 的 MicroPython 固件。"
           fi
 
           gh release upload "$TAG" dist/*.bin dist/*.uf2 --clobber

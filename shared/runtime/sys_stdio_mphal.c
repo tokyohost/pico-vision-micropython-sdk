@@ -31,6 +31,7 @@
 #include "py/stream.h"
 #include "py/mperrno.h"
 #include "py/mphal.h"
+#include "py/runtime.h"
 
 // TODO make stdin, stdout and stderr writable objects so they can
 // be changed by Python code.  This requires some changes, as these
@@ -97,12 +98,34 @@ static mp_uint_t stdio_ioctl(mp_obj_t self_in, mp_uint_t request, uintptr_t arg,
     }
 }
 
+#if MICROPY_HAL_HAS_STDIO_NONBLOCKING_READ
+// 将标准输入中当前已经到达的字节批量复制到目标缓冲区，且绝不等待后续字节。
+static mp_obj_t stdio_readinto_nonblocking(mp_obj_t self_in, mp_obj_t buffer_in) {
+    sys_stdio_obj_t *self = MP_OBJ_TO_PTR(self_in);
+    if (self->fd != STDIO_FD_IN) {
+        mp_raise_OSError(MP_EPERM);
+    }
+
+    mp_buffer_info_t buffer;
+    mp_get_buffer_raise(buffer_in, &buffer, MP_BUFFER_WRITE);
+    size_t count = 0;
+    while (count < buffer.len && (mp_hal_stdio_poll(MP_STREAM_POLL_RD) & MP_STREAM_POLL_RD)) {
+        ((byte *)buffer.buf)[count++] = mp_hal_stdin_rx_chr();
+    }
+    return MP_OBJ_NEW_SMALL_INT(count);
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(stdio_readinto_nonblocking_obj, stdio_readinto_nonblocking);
+#endif
+
 static const mp_rom_map_elem_t stdio_locals_dict_table[] = {
     #if MICROPY_PY_SYS_STDIO_BUFFER
     { MP_ROM_QSTR(MP_QSTR_buffer), MP_ROM_PTR(&stdio_buffer_obj) },
     #endif
     { MP_ROM_QSTR(MP_QSTR_read), MP_ROM_PTR(&mp_stream_read_obj) },
     { MP_ROM_QSTR(MP_QSTR_readinto), MP_ROM_PTR(&mp_stream_readinto_obj) },
+    #if MICROPY_HAL_HAS_STDIO_NONBLOCKING_READ
+    { MP_ROM_QSTR(MP_QSTR_readinto_nonblocking), MP_ROM_PTR(&stdio_readinto_nonblocking_obj) },
+    #endif
     { MP_ROM_QSTR(MP_QSTR_readline), MP_ROM_PTR(&mp_stream_unbuffered_readline_obj)},
     { MP_ROM_QSTR(MP_QSTR_readlines), MP_ROM_PTR(&mp_stream_unbuffered_readlines_obj)},
     { MP_ROM_QSTR(MP_QSTR_write), MP_ROM_PTR(&mp_stream_write_obj) },

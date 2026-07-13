@@ -24,12 +24,21 @@ make -C ports/esp32 \
   USER_C_MODULES="$(pwd)/ports/esp32/usermod/micropython.cmake"
 ```
 
-带八线 PSRAM 的 ESP32-S3 模组可使用官方变体：
+N8R8 模组使用 8MiB Flash 与 8MiB Octal PSRAM 变体：
 
 ```sh
 make -C ports/esp32 \
   BOARD=ESP32_GENERIC_S3 \
-  BOARD_VARIANT=SPIRAM_OCT \
+  BOARD_VARIANT=N8R8 \
+  USER_C_MODULES="$(pwd)/ports/esp32/usermod/micropython.cmake"
+```
+
+N16R8 模组使用 16MiB Flash 与 8MiB Octal PSRAM 变体：
+
+```sh
+make -C ports/esp32 \
+  BOARD=ESP32_GENERIC_S3 \
+  BOARD_VARIANT=N16R8 \
   USER_C_MODULES="$(pwd)/ports/esp32/usermod/micropython.cmake"
 ```
 
@@ -40,8 +49,9 @@ make -C ports/esp32 \
 Found User C Module(s): usermod_fn_canvas, usermod_fn_protocol
 ```
 
-固件位于 `ports/esp32/build-ESP32_GENERIC_S3/firmware.bin`；使用 PSRAM 变体时位于
-`ports/esp32/build-ESP32_GENERIC_S3-SPIRAM_OCT/firmware.bin`。
+普通固件位于 `ports/esp32/build-ESP32_GENERIC_S3/firmware.bin`；N8R8 与 N16R8
+固件分别位于 `ports/esp32/build-ESP32_GENERIC_S3-N8R8/firmware.bin` 和
+`ports/esp32/build-ESP32_GENERIC_S3-N16R8/firmware.bin`。
 
 ## 烧录和验证
 
