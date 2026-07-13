@@ -1,0 +1,109 @@
+name: 发布 ESP32-S3 固件
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-esp32-s3:
+    runs-on: ubuntu-latest
+
+    env:
+      BOARD: ESP32_GENERIC_S3
+
+    steps:
+      - name: 检出源代码
+        uses: actions/checkout@v4
+
+      - name: 读取 ESP-IDF 支持版本
+        id: idf_ver
+        run: |
+          echo "IDF_VER=$(yq .env.IDF_NEWEST_VER < .github/workflows/ports_esp32.yml)" \
+            | tee "${GITHUB_OUTPUT}"
+
+      - name: 配置 ESP-IDF
+        uses: ./.github/actions/setup_esp32
+        with:
+          idf_ver: ${{ steps.idf_ver.outputs.IDF_VER }}
+          ccache_key: fn-vision-esp32-s3-release
+
+      - name: 构建 mpy-cross
+        run: |
+          make -C mpy-cross USER_C_MODULES=
+
+      - name: 准备 ESP32 子模块
+        run: |
+          make -C ports/esp32 submodules BOARD=${BOARD}
+
+      - name: 构建 ESP32-S3 固件
+        run: |
+          make -C ports/esp32 BOARD=${BOARD} \
+            USER_C_MODULES="${GITHUB_WORKSPACE}/ports/esp32/usermod/micropython.cmake"
+
+      - name: 校验 ESP32-S3 原生模块
+        run: |
+          grep -q "MP_QSTR_fn_canvas" \
+            ports/esp32/build-${BOARD}/genhdr/qstrdefs.generated.h
+          grep -q "MP_QSTR_fn_protocol" \
+            ports/esp32/build-${BOARD}/genhdr/qstrdefs.generated.h
+          test -s "ports/esp32/build-${BOARD}/firmware.bin"
+          test -s "ports/esp32/build-${BOARD}/micropython.uf2"
+
+      - name: 整理 ESP32-S3 发布文件
+        run: |
+          mkdir -p dist
+          cp ports/esp32/build-${BOARD}/firmware.bin \
+            dist/micropython-${BOARD}-${GITHUB_REF_NAME}.bin
+          cp ports/esp32/build-${BOARD}/micropython.uf2 \
+            dist/micropython-${BOARD}-${GITHUB_REF_NAME}.uf2
+          ls -lh dist
+
+      - name: 上传 ESP32-S3 构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: micropython-${{ env.BOARD }}-${{ github.ref_name }}
+          path: |
+            dist/*.bin
+            dist/*.uf2
+          if-no-files-found: error
+
+  release-esp32-s3:
+    needs: build-esp32-s3
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: firmware-release-${{ github.ref }}
+      cancel-in-progress: false
+
+    steps:
+      - name: 下载 ESP32-S3 构建产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: micropython-*-${{ github.ref_name }}
+          path: dist
+          merge-multiple: true
+
+      - name: 校验 ESP32-S3 发布文件
+        run: |
+          test -f "dist/micropython-ESP32_GENERIC_S3-${GITHUB_REF_NAME}.bin"
+          test -f "dist/micropython-ESP32_GENERIC_S3-${GITHUB_REF_NAME}.uf2"
+          ls -lh dist
+
+      - name: 发布 ESP32-S3 固件
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "内置 fn_canvas API v7 与 fn_protocol API v1 的 MicroPython 固件。"
+          fi
+
+          gh release upload "$TAG" dist/*.bin dist/*.uf2 --clobber

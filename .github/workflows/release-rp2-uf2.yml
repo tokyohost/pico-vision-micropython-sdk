@@ -1,4 +1,4 @@
-name: Release RP2 UF2
+name: 发布 RP2 固件
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build-rp2:
     runs-on: ubuntu-latest
 
     strategy:
@@ -23,12 +23,12 @@ jobs:
       BOARD: ${{ matrix.board }}
 
     steps:
-      - name: Checkout source
+      - name: 检出源代码
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install build dependencies
+      - name: 安装 RP2 构建依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -40,64 +40,74 @@ jobs:
             gcc-arm-none-eabi \
             libnewlib-arm-none-eabi
 
-      - name: Build mpy-cross
+      - name: 构建 mpy-cross
         run: |
           make -C mpy-cross USER_C_MODULES=
 
-      - name: Prepare RP2 submodules
+      - name: 准备 RP2 子模块
         run: |
           make -C ports/rp2 submodules
 
-      - name: Build RP2 firmware
+      - name: 构建 RP2 固件
         run: |
           make -C ports/rp2 BOARD=${BOARD} \
             USER_C_MODULES=modules/micropython.cmake
 
-      - name: Verify native modules are linked
+      - name: 校验 RP2 原生模块
         run: |
           grep -q "MP_QSTR_fn_canvas" \
             ports/rp2/build-${BOARD}/genhdr/qstrdefs.generated.h
           grep -q "MP_QSTR_fn_protocol" \
             ports/rp2/build-${BOARD}/genhdr/qstrdefs.generated.h
+          test -s "ports/rp2/build-${BOARD}/firmware.uf2"
 
-      - name: Prepare release files
+      - name: 整理 RP2 发布文件
         run: |
           mkdir -p dist
-          cp ports/rp2/build-${BOARD}/firmware.uf2 dist/micropython-${BOARD}-${GITHUB_REF_NAME}.uf2
+          cp ports/rp2/build-${BOARD}/firmware.uf2 \
+            dist/micropython-${BOARD}-${GITHUB_REF_NAME}.uf2
           ls -lh dist
 
-      - name: Upload UF2 artifact
+      - name: 上传 RP2 构建产物
         uses: actions/upload-artifact@v4
         with:
           name: micropython-${{ env.BOARD }}-${{ github.ref_name }}
           path: dist/*.uf2
           if-no-files-found: error
 
-  release:
-    needs: build-and-release
+  release-rp2:
+    needs: build-rp2
     runs-on: ubuntu-latest
 
+    concurrency:
+      group: firmware-release-${{ github.ref }}
+      cancel-in-progress: false
+
     steps:
-      - name: Download all UF2 artifacts
+      - name: 下载 RP2 构建产物
         uses: actions/download-artifact@v4
         with:
           pattern: micropython-*-${{ github.ref_name }}
           path: dist
           merge-multiple: true
 
-      - name: Verify release files
+      - name: 校验 RP2 发布文件
         run: |
           test -f "dist/micropython-RPI_PICO-${GITHUB_REF_NAME}.uf2"
           test -f "dist/micropython-RPI_PICO2-${GITHUB_REF_NAME}.uf2"
           ls -lh dist
 
-      - name: Create GitHub Release and upload UF2 files
+      - name: 发布 RP2 固件
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           TAG="${GITHUB_REF_NAME}"
 
-          gh release create "$TAG" dist/*.uf2 \
-            --title "$TAG" \
-            --notes "MicroPython RP2 UF2 firmware for RP2040 (RPI_PICO) and RP2350 (RPI_PICO2), with fn_canvas API v7 and fn_protocol API v1."
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "内置 fn_canvas API v7 与 fn_protocol API v1 的 MicroPython 固件。"
+          fi
+
+          gh release upload "$TAG" dist/*.uf2 --clobber
