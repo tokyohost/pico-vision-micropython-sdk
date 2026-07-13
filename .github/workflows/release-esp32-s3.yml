@@ -37,10 +37,12 @@ jobs:
 
       - name: 准备 ESP32 子模块
         run: |
+          source esp-idf/export.sh
           make -C ports/esp32 submodules BOARD=${BOARD}
 
       - name: 构建 ESP32-S3 固件
         run: |
+          source esp-idf/export.sh
           make -C ports/esp32 BOARD=${BOARD} \
             USER_C_MODULES="${GITHUB_WORKSPACE}/ports/esp32/usermod/micropython.cmake"
 
