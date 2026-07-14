@@ -95,7 +95,7 @@ jobs:
 
     steps:
       - name: 下载 ESP32-S3 构建产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: micropython-*-${{ github.ref_name }}
           path: dist
