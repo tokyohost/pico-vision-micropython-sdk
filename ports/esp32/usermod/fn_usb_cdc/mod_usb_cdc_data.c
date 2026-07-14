@@ -5,7 +5,7 @@
 
 #include "py/runtime.h"
 #include "esp_heap_caps.h"
-#include "usb_cdc_data_port.h"
+#include "shared/tinyusb/mp_usbd_cdc.h"
 
 #if MICROPY_HW_USB_CDC_DATA
 
