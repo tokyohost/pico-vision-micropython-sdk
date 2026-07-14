@@ -11,13 +11,77 @@
 
 #include "py/binary.h"
 #include "py/obj.h"
+#include "py/objtuple.h"
 #include "py/runtime.h"
+#include "py/unicode.h"
 
-#define FN_CANVAS_API_VERSION (7)
+#ifndef FN_CANVAS_BUILTIN_FONTS
+#define FN_CANVAS_BUILTIN_FONTS (0)
+#endif
+
+#if FN_CANVAS_BUILTIN_FONTS
+#include "font_builtin_data.h"
+#endif
+
+#define FN_CANVAS_API_VERSION (FN_CANVAS_BUILTIN_FONTS ? 8 : 7)
 
 #define FN_CANVAS_COMMAND_FILL_RECT (0)
 #define FN_CANVAS_COMMAND_LINE (1)
 #define FN_CANVAS_COMMAND_DRAW_RECT (2)
+
+#define FN_CANVAS_FONT_WQY_8X16 (3)
+#define FN_CANVAS_FONT_FUSION_PIXEL_8X16 (4)
+
+#if FN_CANVAS_BUILTIN_FONTS
+/** 判断字体编号是否对应编译进固件的双语点阵字体。 */
+static bool fn_canvas_is_builtin_font(int font_kind) {
+    return font_kind == FN_CANVAS_FONT_WQY_8X16
+        || font_kind == FN_CANVAS_FONT_FUSION_PIXEL_8X16;
+}
+
+/** 从小端双字节字符索引读取一个 Unicode 基本平面码点。 */
+static uint16_t fn_canvas_builtin_codepoint(uint32_t index) {
+    const uint32_t offset = index * 2U;
+    return (uint16_t)fn_builtin_font_codepoints[offset]
+        | ((uint16_t)fn_builtin_font_codepoints[offset + 1U] << 8);
+}
+
+/** 通过二分查找返回内置字体字形序号，缺字时回退到问号。 */
+static uint32_t fn_canvas_find_builtin_glyph(unichar codepoint) {
+    uint32_t left = 0;
+    uint32_t right = fn_builtin_font_glyph_count;
+    while (left < right) {
+        const uint32_t middle = left + (right - left) / 2U;
+        const uint16_t current = fn_canvas_builtin_codepoint(middle);
+        if (current < codepoint) {
+            left = middle + 1U;
+        } else {
+            right = middle;
+        }
+    }
+    if (left < fn_builtin_font_glyph_count
+        && fn_canvas_builtin_codepoint(left) == codepoint) {
+        return left;
+    }
+    /* 问号位于连续 ASCII 表内，索引等于码点减去空格码点。 */
+    return (uint32_t)('?' - ' ');
+}
+
+/** 返回指定内置字体和 Unicode 码点对应的只读字形地址。 */
+static const uint8_t *fn_canvas_builtin_glyph(int font_kind,
+    unichar codepoint) {
+    const uint32_t index = fn_canvas_find_builtin_glyph(codepoint);
+    const uint8_t *font = font_kind == FN_CANVAS_FONT_WQY_8X16
+        ? fn_builtin_font_wqy_bitmap : fn_builtin_font_fusion_bitmap;
+    return font + index * FN_BUILTIN_FONT_GLYPH_BYTES;
+}
+
+/** 返回半角 ASCII 或全角中文字符的固定水平步进。 */
+static int fn_canvas_builtin_advance(unichar codepoint) {
+    return codepoint < 0x80 ? FN_BUILTIN_FONT_ASCII_ADVANCE
+        : FN_BUILTIN_FONT_FULL_WIDTH_ADVANCE;
+}
+#endif
 
 /** 获取可写画布缓冲区，并校验其容量。 */
 static uint8_t *fn_canvas_get_buffer(mp_obj_t object, size_t required_size) {
@@ -81,6 +145,37 @@ static void fn_canvas_fill_local(uint8_t *buffer, int canvas_width,
         }
     }
 }
+
+#if FN_CANVAS_BUILTIN_FONTS
+/** 在当前裁剪视口内绘制一个固件内置十六像素字形。 */
+static void fn_canvas_draw_builtin_glyph(uint8_t *buffer, int canvas_width,
+    int canvas_height, int origin_x, int origin_y, int font_kind,
+    unichar codepoint, int x, int y, uint16_t color, int scale) {
+    const uint8_t *glyph = fn_canvas_builtin_glyph(font_kind, codepoint);
+    const int glyph_width = fn_canvas_builtin_advance(codepoint);
+    for (int row = 0; row < FN_BUILTIN_FONT_HEIGHT; ++row) {
+        const uint16_t row_bits = ((uint16_t)glyph[row * 2] << 8)
+            | glyph[row * 2 + 1];
+        for (int column = 0; column < glyph_width; ++column) {
+            if ((row_bits & (0x8000U >> column)) == 0) {
+                continue;
+            }
+            int left = x + column * scale - origin_x;
+            int top = y + row * scale - origin_y;
+            int right = left + scale;
+            int bottom = top + scale;
+            left = left < 0 ? 0 : left;
+            top = top < 0 ? 0 : top;
+            right = right > canvas_width ? canvas_width : right;
+            bottom = bottom > canvas_height ? canvas_height : bottom;
+            if (left < right && top < bottom) {
+                fn_canvas_fill_local(buffer, canvas_width, left, top,
+                    right, bottom, color);
+            }
+        }
+    }
+}
+#endif
 
 /** 解析每个绘图入口共用的缓冲区、尺寸和原点参数。 */
 static uint8_t *fn_canvas_parse_canvas(const mp_obj_t *arguments,
@@ -643,7 +738,7 @@ static mp_obj_t fn_canvas_draw_line_chart(size_t argument_count,
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
     fn_canvas_draw_line_chart_obj, 19, 19, fn_canvas_draw_line_chart);
 
-/** 使用 Python 字体列数据一次绘制整段透明背景文字。 */
+/** 使用 Python 字体列数据或固件内置字体绘制整段透明背景文字。 */
 static mp_obj_t fn_canvas_draw_text(size_t argument_count,
     const mp_obj_t *arguments) {
     enum {
@@ -663,6 +758,23 @@ static mp_obj_t fn_canvas_draw_text(size_t argument_count,
     if (scale <= 0) {
         mp_raise_ValueError(MP_ERROR_TEXT("text scale must be positive"));
     }
+#if FN_CANVAS_BUILTIN_FONTS
+    if (fn_canvas_is_builtin_font(font_kind)) {
+        size_t text_length;
+        const byte *cursor = mp_obj_str_get_data(
+            arguments[ARG_VALUE], &text_length);
+        const byte *end = cursor + text_length;
+        while (cursor < end) {
+            const unichar codepoint = utf8_get_char(cursor);
+            fn_canvas_draw_builtin_glyph(buffer, width, height,
+                origin_x, origin_y, font_kind, codepoint,
+                cursor_x, text_y, color, scale);
+            cursor_x += fn_canvas_builtin_advance(codepoint) * scale;
+            cursor = utf8_next_char(cursor);
+        }
+        return mp_const_none;
+    }
+#endif
     mp_map_t *font = mp_obj_dict_get_map(arguments[ARG_FONT]);
     const mp_obj_t fallback_character = mp_obj_new_str("?", 1);
     mp_obj_iter_buf_t iterator_buffer;
@@ -711,6 +823,66 @@ static mp_obj_t fn_canvas_draw_text(size_t argument_count,
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
     fn_canvas_draw_text_obj, 12, 12, fn_canvas_draw_text);
+
+#if FN_CANVAS_BUILTIN_FONTS
+/** 计算固件内置字体字符串在指定缩放倍数下的像素宽度。 */
+static mp_obj_t fn_canvas_text_width(mp_obj_t font_kind_object,
+    mp_obj_t value_object, mp_obj_t scale_object) {
+    const int font_kind = mp_obj_get_int(font_kind_object);
+    const int scale = mp_obj_get_int(scale_object);
+    if (!fn_canvas_is_builtin_font(font_kind)) {
+        mp_raise_ValueError(MP_ERROR_TEXT("unknown builtin font"));
+    }
+    if (scale <= 0) {
+        mp_raise_ValueError(MP_ERROR_TEXT("text scale must be positive"));
+    }
+    size_t text_length;
+    const byte *cursor = mp_obj_str_get_data(value_object, &text_length);
+    const byte *end = cursor + text_length;
+    mp_int_t width = 0;
+    while (cursor < end) {
+        width += fn_canvas_builtin_advance(utf8_get_char(cursor)) * scale;
+        cursor = utf8_next_char(cursor);
+    }
+    return mp_obj_new_int(width);
+}
+static MP_DEFINE_CONST_FUN_OBJ_3(
+    fn_canvas_text_width_obj, fn_canvas_text_width);
+
+/** 返回固件内置字形的逐列位图，供 Python Canvas 兼容后端使用。 */
+static mp_obj_t fn_canvas_font_glyph(mp_obj_t font_kind_object,
+    mp_obj_t character_object) {
+    const int font_kind = mp_obj_get_int(font_kind_object);
+    if (!fn_canvas_is_builtin_font(font_kind)) {
+        mp_raise_ValueError(MP_ERROR_TEXT("unknown builtin font"));
+    }
+    size_t character_length;
+    const byte *character = mp_obj_str_get_data(
+        character_object, &character_length);
+    if (character_length == 0
+        || utf8_next_char(character) != character + character_length) {
+        mp_raise_ValueError(MP_ERROR_TEXT("font glyph requires one character"));
+    }
+    const unichar codepoint = utf8_get_char(character);
+    const uint8_t *glyph = fn_canvas_builtin_glyph(font_kind, codepoint);
+    const size_t glyph_width = (size_t)fn_canvas_builtin_advance(codepoint);
+    mp_obj_tuple_t *columns = MP_OBJ_TO_PTR(mp_obj_new_tuple(glyph_width, NULL));
+    for (size_t column = 0; column < glyph_width; ++column) {
+        uint16_t bits = 0;
+        for (int row = 0; row < FN_BUILTIN_FONT_HEIGHT; ++row) {
+            const uint16_t row_bits = ((uint16_t)glyph[row * 2] << 8)
+                | glyph[row * 2 + 1];
+            if ((row_bits & (0x8000U >> column)) != 0) {
+                bits |= (uint16_t)(1U << row);
+            }
+        }
+        columns->items[column] = MP_OBJ_NEW_SMALL_INT(bits);
+    }
+    return MP_OBJ_FROM_PTR(columns);
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(
+    fn_canvas_font_glyph_obj, fn_canvas_font_glyph);
+#endif
 
 /** 一次解析并执行矩形填充、线段和矩形边框命令序列。 */
 static mp_obj_t fn_canvas_draw_commands(size_t argument_count,
@@ -775,6 +947,10 @@ static const mp_rom_map_elem_t fn_canvas_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_draw_columns), MP_ROM_PTR(&fn_canvas_draw_columns_obj)},
     {MP_ROM_QSTR(MP_QSTR_draw_line_chart), MP_ROM_PTR(&fn_canvas_draw_line_chart_obj)},
     {MP_ROM_QSTR(MP_QSTR_draw_text), MP_ROM_PTR(&fn_canvas_draw_text_obj)},
+#if FN_CANVAS_BUILTIN_FONTS
+    {MP_ROM_QSTR(MP_QSTR_text_width), MP_ROM_PTR(&fn_canvas_text_width_obj)},
+    {MP_ROM_QSTR(MP_QSTR_font_glyph), MP_ROM_PTR(&fn_canvas_font_glyph_obj)},
+#endif
     {MP_ROM_QSTR(MP_QSTR_draw_commands), MP_ROM_PTR(&fn_canvas_draw_commands_obj)},
 };
 static MP_DEFINE_CONST_DICT(fn_canvas_module_globals, fn_canvas_module_globals_table);

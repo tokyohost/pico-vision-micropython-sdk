@@ -74,7 +74,9 @@ print(fn_canvas.api_version())
 print(fn_protocol.api_version())
 ```
 
-当前应分别输出 `7` 和 `1`。完整设备端冒烟测试位于
+当前带双语字体的 ESP32-S3 固件应分别输出 `8` 和 `1`。`fn_canvas` 同时提供
+`font_glyph()` 与 `text_width()`，并内置 `wqy_8x16`、`fusion_pixel_8x16` 两套
+英文半角八像素、中文全角十六像素字体。完整设备端冒烟测试位于
 `ports/esp32/usermod/tests/smoke_test.py`，可使用 `mpremote` 执行：
 
 ```sh

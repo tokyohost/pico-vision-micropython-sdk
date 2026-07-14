@@ -23,7 +23,9 @@ def _test_canvas():
     height = 3
     buffer = bytearray(width * height * 2)
 
-    assert fn_canvas.api_version() == 7
+    assert fn_canvas.api_version() == 8
+    assert callable(fn_canvas.font_glyph)
+    assert callable(fn_canvas.text_width)
     fn_canvas.clear(buffer, width, height, 10, 20, 0x1234)
     assert buffer == bytes((0x12, 0x34)) * (width * height)
 

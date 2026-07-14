@@ -18,6 +18,7 @@ jobs:
         board:
           - RPI_PICO
           - RPI_PICO2
+          - FN_VISION_RP2040_4M
 
     env:
       BOARD: ${{ matrix.board }}
@@ -59,6 +60,12 @@ jobs:
             ports/rp2/build-${BOARD}/genhdr/qstrdefs.generated.h
           grep -q "MP_QSTR_fn_protocol" \
             ports/rp2/build-${BOARD}/genhdr/qstrdefs.generated.h
+          if [[ "${BOARD}" == "FN_VISION_RP2040_4M" ]]; then
+            grep -q "MP_QSTR_font_glyph" \
+              ports/rp2/build-${BOARD}/genhdr/qstrdefs.generated.h
+            grep -q "MP_QSTR_text_width" \
+              ports/rp2/build-${BOARD}/genhdr/qstrdefs.generated.h
+          fi
           test -s "ports/rp2/build-${BOARD}/firmware.uf2"
 
       - name: 整理 RP2 发布文件
@@ -95,6 +102,7 @@ jobs:
         run: |
           test -f "dist/micropython-RPI_PICO-${GITHUB_REF_NAME}.uf2"
           test -f "dist/micropython-RPI_PICO2-${GITHUB_REF_NAME}.uf2"
+          test -f "dist/micropython-FN_VISION_RP2040_4M-${GITHUB_REF_NAME}.uf2"
           ls -lh dist
 
       - name: 发布 RP2 固件
@@ -107,7 +115,7 @@ jobs:
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --title "$TAG" \
-              --notes "内置 fn_canvas API v7 与 fn_protocol API v1 的 MicroPython 固件。"
+              --notes "RP2 MicroPython 固件；四兆字节 fn-vision 版本内置 fn_canvas API v8、文泉驿点阵正黑与 Fusion Pixel 双语字体。"
           fi
 
           gh release upload "$TAG" dist/*.uf2 --clobber

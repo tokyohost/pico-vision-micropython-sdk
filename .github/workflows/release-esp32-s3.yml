@@ -60,6 +60,10 @@ jobs:
             ports/esp32/build-${BOARD}-${BOARD_VARIANT}/genhdr/qstrdefs.generated.h
           grep -q "MP_QSTR_fn_protocol" \
             ports/esp32/build-${BOARD}-${BOARD_VARIANT}/genhdr/qstrdefs.generated.h
+          grep -q "MP_QSTR_font_glyph" \
+            ports/esp32/build-${BOARD}-${BOARD_VARIANT}/genhdr/qstrdefs.generated.h
+          grep -q "MP_QSTR_text_width" \
+            ports/esp32/build-${BOARD}-${BOARD_VARIANT}/genhdr/qstrdefs.generated.h
           test -s "ports/esp32/build-${BOARD}-${BOARD_VARIANT}/firmware.bin"
           test -s "ports/esp32/build-${BOARD}-${BOARD_VARIANT}/micropython.uf2"
 
@@ -115,7 +119,7 @@ jobs:
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --title "$TAG" \
-              --notes "适用于 ESP32-S3 N8R8 与 N16R8，内置 fn_canvas API v7 与 fn_protocol API v1 的 MicroPython 固件。"
+              --notes "适用于 ESP32-S3 N8R8 与 N16R8，内置 fn_canvas API v8、fn_protocol API v1、文泉驿点阵正黑与 Fusion Pixel 双语字体。"
           fi
 
           gh release upload "$TAG" dist/*.bin dist/*.uf2 --clobber
