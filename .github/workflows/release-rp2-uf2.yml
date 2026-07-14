@@ -76,7 +76,7 @@ jobs:
           ls -lh dist
 
       - name: 上传 RP2 构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: micropython-${{ env.BOARD }}-${{ github.ref_name }}
           path: dist/*.uf2

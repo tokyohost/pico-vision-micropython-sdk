@@ -63,7 +63,7 @@ jobs:
 
       - name: 上传 ESP-IDF 失败日志
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: esp-idf-failure-${{ matrix.board_variant }}-${{ github.run_id }}
           path: ports/esp32/build-${{ env.BOARD }}-${{ matrix.board_variant }}/log/
@@ -97,7 +97,7 @@ jobs:
           ls -lh dist
 
       - name: 上传 ESP32-S3 构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: micropython-${{ env.BOARD }}-${{ matrix.board_variant }}-${{ github.ref_name }}
           path: |
