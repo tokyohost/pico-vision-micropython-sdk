@@ -6,6 +6,10 @@ if(FN_CANVAS_BUILTIN_FONTS)
     add_library(fn_canvas_font_data STATIC
         ${CMAKE_CURRENT_LIST_DIR}/font_builtin_data.c
     )
+    # QSTR 预处理阶段不会继承接口库定义，需显式启用内置字体相关方法名扫描。
+    list(APPEND MICROPY_CPP_DEF_EXTRA
+        FN_CANVAS_BUILTIN_FONTS=1
+    )
     target_compile_definitions(usermod_fn_canvas INTERFACE
         FN_CANVAS_BUILTIN_FONTS=1
     )

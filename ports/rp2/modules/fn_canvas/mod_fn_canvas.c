@@ -761,7 +761,7 @@ static mp_obj_t fn_canvas_draw_text(size_t argument_count,
 #if FN_CANVAS_BUILTIN_FONTS
     if (fn_canvas_is_builtin_font(font_kind)) {
         size_t text_length;
-        const byte *cursor = mp_obj_str_get_data(
+        const byte *cursor = (const byte *)mp_obj_str_get_data(
             arguments[ARG_VALUE], &text_length);
         const byte *end = cursor + text_length;
         while (cursor < end) {
@@ -837,7 +837,8 @@ static mp_obj_t fn_canvas_text_width(mp_obj_t font_kind_object,
         mp_raise_ValueError(MP_ERROR_TEXT("text scale must be positive"));
     }
     size_t text_length;
-    const byte *cursor = mp_obj_str_get_data(value_object, &text_length);
+    const byte *cursor = (const byte *)mp_obj_str_get_data(
+        value_object, &text_length);
     const byte *end = cursor + text_length;
     mp_int_t width = 0;
     while (cursor < end) {
@@ -857,7 +858,7 @@ static mp_obj_t fn_canvas_font_glyph(mp_obj_t font_kind_object,
         mp_raise_ValueError(MP_ERROR_TEXT("unknown builtin font"));
     }
     size_t character_length;
-    const byte *character = mp_obj_str_get_data(
+    const byte *character = (const byte *)mp_obj_str_get_data(
         character_object, &character_length);
     if (character_length == 0
         || utf8_next_char(character) != character + character_length) {
