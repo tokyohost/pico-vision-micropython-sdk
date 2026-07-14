@@ -1,0 +1,8 @@
+# 此分区表适用于具有 8MiB 或更大 Flash 的设备。
+# 前 4MiB 用于引导程序、NVS、PHY 初始化数据和固件，其余空间用于用户文件系统。
+
+# 分区表自身的偏移量由 ESP-IDF 的 Kconfig.projbuild 配置。
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 0x3F0000,
