@@ -75,6 +75,10 @@ const uint8_t mp_usbd_builtin_desc_cfg[MP_USBD_BUILTIN_DESC_CFG_LEN] = {
     #if CFG_TUD_CDC
     TUD_CDC_DESCRIPTOR(USBD_ITF_CDC, USBD_STR_CDC, USBD_CDC_EP_CMD,
         USBD_CDC_CMD_MAX_SIZE, USBD_CDC_EP_OUT, USBD_CDC_EP_IN, USBD_CDC_IN_OUT_MAX_SIZE),
+    #if MICROPY_HW_USB_CDC_DATA
+    TUD_CDC_DESCRIPTOR(USBD_ITF_CDC_DATA, USBD_STR_CDC_DATA, USBD_CDC_DATA_EP_CMD,
+        USBD_CDC_CMD_MAX_SIZE, USBD_CDC_DATA_EP_OUT, USBD_CDC_DATA_EP_IN, USBD_CDC_IN_OUT_MAX_SIZE),
+    #endif
     #endif
     #if CFG_TUD_MSC
     TUD_MSC_DESCRIPTOR(USBD_ITF_MSC, USBD_STR_MSC, EPNUM_MSC_OUT, EPNUM_MSC_IN, USBD_MSC_IN_OUT_MAX_SIZE),
@@ -124,6 +128,11 @@ const uint16_t *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
             case USBD_STR_CDC:
                 desc_str = MICROPY_HW_USB_CDC_INTERFACE_STRING;
                 break;
+            #if MICROPY_HW_USB_CDC_DATA
+            case USBD_STR_CDC_DATA:
+                desc_str = "FN Vision Data";
+                break;
+            #endif
             #endif
             #if CFG_TUD_MSC
             case USBD_STR_MSC:

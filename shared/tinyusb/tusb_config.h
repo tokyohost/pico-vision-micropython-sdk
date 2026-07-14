@@ -63,8 +63,12 @@
 #define CFG_TUSB_RHPORT0_MODE   (OPT_MODE_DEVICE)
 #endif
 
+#ifndef MICROPY_HW_USB_CDC_DATA
+#define MICROPY_HW_USB_CDC_DATA (0)
+#endif
+
 #if MICROPY_HW_USB_CDC
-#define CFG_TUD_CDC             (1)
+#define CFG_TUD_CDC             (1 + MICROPY_HW_USB_CDC_DATA)
 #else
 #define CFG_TUD_CDC             (0)
 #endif
@@ -101,7 +105,8 @@
 #define USBD_STR_PRODUCT (0x02)
 #define USBD_STR_SERIAL (0x03)
 #define USBD_STR_CDC (0x04)
-#define USBD_STR_MSC (0x05)
+#define USBD_STR_CDC_DATA (0x05)
+#define USBD_STR_MSC (0x06)
 
 #define USBD_MAX_POWER_MA (250)
 
@@ -114,11 +119,21 @@
 #define USBD_CDC_EP_CMD (0x81)
 #define USBD_CDC_EP_OUT (0x02)
 #define USBD_CDC_EP_IN (0x82)
+#if MICROPY_HW_USB_CDC_DATA
+#define USBD_ITF_CDC_DATA (2) // needs 2 interfaces
+#define USBD_CDC_DATA_EP_CMD (0x83)
+#define USBD_CDC_DATA_EP_OUT (0x04)
+#define USBD_CDC_DATA_EP_IN (0x84)
+#endif
 #endif // CFG_TUD_CDC
 
 #if CFG_TUD_MSC
 // Interface & Endpoint numbers for MSC come after CDC, if it is enabled
-#if CFG_TUD_CDC
+#if MICROPY_HW_USB_CDC_DATA
+#define USBD_ITF_MSC (4)
+#define EPNUM_MSC_OUT (0x05)
+#define EPNUM_MSC_IN (0x85)
+#elif CFG_TUD_CDC
 #define USBD_ITF_MSC (2)
 #define EPNUM_MSC_OUT (0x03)
 #define EPNUM_MSC_IN (0x83)
@@ -134,6 +149,10 @@
 #define USBD_ITF_BUILTIN_MAX (USBD_ITF_MSC + 1)
 #define USBD_STR_BUILTIN_MAX (USBD_STR_MSC + 1)
 #define USBD_EP_BUILTIN_MAX (EPNUM_MSC_OUT + 1)
+#elif MICROPY_HW_USB_CDC_DATA
+#define USBD_ITF_BUILTIN_MAX (USBD_ITF_CDC_DATA + 2)
+#define USBD_STR_BUILTIN_MAX (USBD_STR_CDC_DATA + 1)
+#define USBD_EP_BUILTIN_MAX (((USBD_CDC_DATA_EP_IN)&~TUSB_DIR_IN_MASK) + 1)
 #elif CFG_TUD_CDC
 #define USBD_ITF_BUILTIN_MAX (USBD_ITF_CDC + 2)
 #define USBD_STR_BUILTIN_MAX (USBD_STR_CDC + 1)

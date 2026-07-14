@@ -3,6 +3,7 @@ add_library(usermod_fn_usb_cdc INTERFACE)
 
 target_sources(usermod_fn_usb_cdc INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/mod_usb_cdc_data.c
+    ${CMAKE_CURRENT_LIST_DIR}/usb_cdc_data_port.h
 )
 
 target_include_directories(usermod_fn_usb_cdc INTERFACE
