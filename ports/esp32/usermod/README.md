@@ -74,9 +74,11 @@ import _usb_cdc_data
 print(fn_canvas.api_version())
 print(fn_protocol.api_version())
 print(_usb_cdc_data.api_version())
+print(_usb_cdc_data.init())
 ```
 
-当前带双语字体和原生双 CDC 的 ESP32-S3 固件应分别输出 `8`、`1` 和 `1`。`fn_canvas` 同时提供
+当前带双语字体和原生双 CDC 的 ESP32-S3 固件应分别输出 `8`、`1`、`1` 和 `32768`。数据 CDC 的
+32 KB 接收环形缓冲由 `init()` 优先从 PSRAM 分配，PSRAM 不可用时才回退到内部 DRAM。`fn_canvas` 同时提供
 `font_glyph()` 与 `text_width()`，并内置 `wqy_8x16`、`fusion_pixel_8x16` 两套
 英文半角八像素、中文全角十六像素字体。完整设备端冒烟测试位于
 `ports/esp32/usermod/tests/smoke_test.py`，可使用 `mpremote` 执行：

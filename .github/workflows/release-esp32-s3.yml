@@ -54,11 +54,31 @@ jobs:
           make -C ports/esp32 BOARD=${BOARD} BOARD_VARIANT=${BOARD_VARIANT} \
             USER_C_MODULES="${GITHUB_WORKSPACE}/ports/esp32/usermod/micropython.cmake"
 
+      - name: 输出 ESP-IDF 失败日志
+        if: failure()
+        run: |
+          find "ports/esp32/build-${BOARD}-${BOARD_VARIANT}/log" \
+            -maxdepth 1 -type f -name 'idf_py_*_output_*' \
+            -print -exec tail -n 300 {} \;
+
+      - name: 上传 ESP-IDF 失败日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp-idf-failure-${{ matrix.board_variant }}-${{ github.run_id }}
+          path: ports/esp32/build-${{ env.BOARD }}-${{ matrix.board_variant }}/log/
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: 校验 ESP32-S3 原生模块
         run: |
           grep -q "MP_QSTR_fn_canvas" \
             ports/esp32/build-${BOARD}-${BOARD_VARIANT}/genhdr/qstrdefs.generated.h
           grep -q "MP_QSTR_fn_protocol" \
+            ports/esp32/build-${BOARD}-${BOARD_VARIANT}/genhdr/qstrdefs.generated.h
+          grep -q "MP_QSTR__usb_cdc_data" \
+            ports/esp32/build-${BOARD}-${BOARD_VARIANT}/genhdr/qstrdefs.generated.h
+          grep -q "MP_QSTR_init" \
             ports/esp32/build-${BOARD}-${BOARD_VARIANT}/genhdr/qstrdefs.generated.h
           grep -q "MP_QSTR_font_glyph" \
             ports/esp32/build-${BOARD}-${BOARD_VARIANT}/genhdr/qstrdefs.generated.h

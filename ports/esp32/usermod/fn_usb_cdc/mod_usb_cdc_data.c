@@ -5,8 +5,37 @@
 
 #include "py/runtime.h"
 #include "shared/tinyusb/mp_usbd_cdc.h"
+#include "esp_heap_caps.h"
 
 #if MICROPY_HW_USB_CDC_DATA
+
+static uint8_t *usb_cdc_data_rx_buffer;
+
+// 初始化数据 CDC 接收缓冲区，优先使用 PSRAM，避免长期占用内部 DRAM。
+static mp_obj_t usb_cdc_data_init(void) {
+    if (usb_cdc_data_rx_buffer == NULL) {
+        size_t allocation_size = MICROPY_HW_USB_CDC_DATA_RX_BUFSIZE + 1;
+        usb_cdc_data_rx_buffer = heap_caps_malloc(
+            allocation_size,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        );
+        if (usb_cdc_data_rx_buffer == NULL) {
+            usb_cdc_data_rx_buffer = heap_caps_malloc(
+                allocation_size,
+                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+            );
+        }
+        if (usb_cdc_data_rx_buffer == NULL) {
+            mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("USB CDC RX buffer allocation failed"));
+        }
+    }
+    mp_usbd_cdc_data_rx_configure(
+        usb_cdc_data_rx_buffer,
+        MICROPY_HW_USB_CDC_DATA_RX_BUFSIZE + 1
+    );
+    return MP_OBJ_NEW_SMALL_INT(MICROPY_HW_USB_CDC_DATA_RX_BUFSIZE);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(usb_cdc_data_init_obj, usb_cdc_data_init);
 
 // 返回数据 CDC 当前无需等待即可读取的字节数。
 static mp_obj_t usb_cdc_data_any(void) {
@@ -53,6 +82,7 @@ static MP_DEFINE_CONST_FUN_OBJ_0(usb_cdc_data_api_version_obj, usb_cdc_data_api_
 
 static const mp_rom_map_elem_t usb_cdc_data_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR__usb_cdc_data) },
+    { MP_ROM_QSTR(MP_QSTR_init), MP_ROM_PTR(&usb_cdc_data_init_obj) },
     { MP_ROM_QSTR(MP_QSTR_any), MP_ROM_PTR(&usb_cdc_data_any_obj) },
     { MP_ROM_QSTR(MP_QSTR_readinto), MP_ROM_PTR(&usb_cdc_data_readinto_obj) },
     { MP_ROM_QSTR(MP_QSTR_write), MP_ROM_PTR(&usb_cdc_data_write_obj) },
