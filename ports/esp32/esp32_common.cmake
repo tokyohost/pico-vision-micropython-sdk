@@ -309,6 +309,16 @@ target_link_options(${MICROPY_TARGET} PUBLIC
   -Wl,--wrap=esp_panic_handler
 )
 
+if(MICROPY_PY_TINYUSB)
+    # ESP-IDF 将 MicroPython 与 TinyUSB 分别放入静态库；显式保留描述符回调，
+    # 避免关闭运行时 USB 后因静态库扫描顺序导致描述符对象未被链接。
+    target_link_options(${MICROPY_TARGET} PUBLIC
+        -Wl,--undefined=tud_descriptor_device_cb
+        -Wl,--undefined=tud_descriptor_configuration_cb
+        -Wl,--undefined=tud_descriptor_string_cb
+    )
+endif()
+
 # Collect all of the include directories and compile definitions for the IDF components,
 # including those added by the IDF Component Manager via idf_components.yaml.
 foreach(comp ${__COMPONENT_NAMES_RESOLVED})
