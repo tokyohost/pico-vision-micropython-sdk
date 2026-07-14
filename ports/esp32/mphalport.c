@@ -54,7 +54,8 @@
 
 TaskHandle_t mp_main_task_handle;
 
-static uint8_t stdin_ringbuf_array[260];
+// 环形缓冲实现会保留一个空槽，因此底层数组需要比有效容量多一个字节。
+static uint8_t stdin_ringbuf_array[MICROPY_HW_STDIN_BUFFER_SIZE + 1];
 ringbuf_t stdin_ringbuf = {stdin_ringbuf_array, sizeof(stdin_ringbuf_array), 0, 0};
 
 portMUX_TYPE mp_atomic_mux = portMUX_INITIALIZER_UNLOCKED;

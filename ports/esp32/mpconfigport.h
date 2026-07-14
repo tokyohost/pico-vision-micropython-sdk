@@ -299,6 +299,16 @@
 #define MICROPY_HW_USB_CDC                  (MICROPY_HW_ENABLE_USBDEV)
 #endif
 
+// 标准输入环形缓冲区的有效容量；底层数组会额外保留一个空槽。
+#ifndef MICROPY_HW_STDIN_BUFFER_SIZE
+#define MICROPY_HW_STDIN_BUFFER_SIZE        (1024)
+#endif
+
+// ESP32 原生 USB CDC 的接收 FIFO 与标准输入容量保持一致，避免跨层搬运时丢字节。
+#if MICROPY_HW_USB_CDC && !defined(CFG_TUD_CDC_RX_BUFSIZE)
+#define CFG_TUD_CDC_RX_BUFSIZE              (MICROPY_HW_STDIN_BUFFER_SIZE)
+#endif
+
 // Enable stdio over USB Serial/JTAG peripheral
 // (SOC_USB_OTG_PERIPH_NUM is only 2 on the ESP32-P4, which supports both native USB & Serial/JTAG simultaneously)
 #ifndef MICROPY_HW_ESP_USB_SERIAL_JTAG
