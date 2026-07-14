@@ -1,8 +1,8 @@
 # fn-vision ESP32-S3 原生模块
 
-本目录将 `fn_canvas` 和 `fn_protocol` 接入 MicroPython 的 ESP32 CMake 构建。
-两个模块只使用通用 MicroPython C API，不依赖 RP2 外设；ESP32-S3 构建直接复用
-现有单份源码，以保证 Pico 与 ESP32-S3 的接口和行为一致。
+本目录将 `fn_canvas`、`fn_protocol` 和 `_usb_cdc_data` 接入 MicroPython 的
+ESP32 CMake 构建。绘图和协议模块复用通用源码；数据 CDC 模块绑定 ESP32-S3
+固件内置的第二路 TinyUSB CDC。
 
 ## 准备环境
 
@@ -46,7 +46,7 @@ make -C ports/esp32 \
 可避免 `USER_C_MODULES` 相对路径以主组件目录为基准时产生歧义。构建日志应包含：
 
 ```text
-Found User C Module(s): usermod_fn_canvas, usermod_fn_protocol
+Found User C Module(s): usermod_fn_canvas, usermod_fn_protocol, usermod_fn_usb_cdc
 ```
 
 普通固件位于 `ports/esp32/build-ESP32_GENERIC_S3/firmware.bin`；N8R8 与 N16R8
@@ -69,12 +69,14 @@ make -C ports/esp32 \
 ```python
 import fn_canvas
 import fn_protocol
+import _usb_cdc_data
 
 print(fn_canvas.api_version())
 print(fn_protocol.api_version())
+print(_usb_cdc_data.api_version())
 ```
 
-当前带双语字体的 ESP32-S3 固件应分别输出 `8` 和 `1`。`fn_canvas` 同时提供
+当前带双语字体和原生双 CDC 的 ESP32-S3 固件应分别输出 `8`、`1` 和 `1`。`fn_canvas` 同时提供
 `font_glyph()` 与 `text_width()`，并内置 `wqy_8x16`、`fusion_pixel_8x16` 两套
 英文半角八像素、中文全角十六像素字体。完整设备端冒烟测试位于
 `ports/esp32/usermod/tests/smoke_test.py`，可使用 `mpremote` 执行：
