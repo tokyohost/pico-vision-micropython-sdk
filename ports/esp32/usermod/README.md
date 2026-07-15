@@ -1,8 +1,9 @@
 # fn-vision ESP32-S3 原生模块
 
 本目录将 `fn_canvas`、`fn_lcd`、`fn_protocol` 和 `_usb_cdc_data` 接入
-MicroPython 的 ESP32 CMake 构建。绘图和协议模块复用通用源码；`fn_lcd` 使用
-内部 DMA 双缓冲发送 PSRAM 像素；数据 CDC 模块绑定 ESP32-S3 固件内置的第二路
+MicroPython 的 ESP32 CMake 构建。绘图和协议模块复用通用源码；`fn_lcd` 接收
+屏幕与 GPIO 方案，自动比较完整 RGB565 画布，使用两块内部 SRAM 条带缓冲和
+两块内部 DMA 缓冲只发送变化区域；数据 CDC 模块绑定 ESP32-S3 固件内置的第二路
 TinyUSB CDC。
 
 ## 准备环境
@@ -75,13 +76,14 @@ import _usb_cdc_data
 
 print(fn_canvas.api_version())
 print(fn_lcd.api_version())
-print(fn_lcd.init(4092))
 print(fn_protocol.api_version())
 print(_usb_cdc_data.api_version())
 print(_usb_cdc_data.init())
 ```
 
-当前带双语字体、LCD DMA 和原生双 CDC 的 ESP32-S3 固件应依次输出 `8`、`1`、`4092`、`1`、`1` 和 `32768`。数据 CDC 的
+当前带双语字体、完整画布 LCD DMA 和原生双 CDC 的 ESP32-S3 固件应依次输出
+`8`、`2`、`1`、`1` 和 `32768`。`fn_lcd.init()` 的屏幕、脚位和缓冲配置示例已
+包含在设备端冒烟测试中，不应再使用 API 1 的单整数初始化方式。数据 CDC 的
 32 KB 接收环形缓冲由 `init()` 优先从 PSRAM 分配，PSRAM 不可用时才回退到内部 DRAM。`fn_canvas` 同时提供
 `font_glyph()` 与 `text_width()`，并内置 `wqy_8x16`、`fusion_pixel_8x16` 两套
 英文半角八像素、中文全角十六像素字体。完整设备端冒烟测试位于

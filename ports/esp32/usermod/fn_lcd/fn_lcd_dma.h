@@ -1,5 +1,5 @@
 /*
- * fn-vision LCD 内部 DMA 双缓冲传输引擎。
+ * fn-vision LCD 完整画布脏区检测与内部 SRAM 双缓冲传输引擎。
  */
 
 #ifndef FN_LCD_DMA_H
@@ -13,29 +13,97 @@
 #include "esp_err.h"
 
 #define FN_LCD_DMA_BUFFER_COUNT (2)
+#define FN_LCD_STRIP_BUFFER_COUNT (2)
 #define FN_LCD_DMA_MAX_CHUNK_SIZE (4092)
+#define FN_LCD_DEFAULT_STRIP_HEIGHT (40)
+#define FN_LCD_DEFAULT_TILE_WIDTH (16)
+#define FN_LCD_DEFAULT_TILE_HEIGHT (8)
+
+typedef struct _fn_lcd_region_t {
+    uint16_t x;
+    uint16_t y;
+    uint16_t width;
+    uint16_t height;
+} fn_lcd_region_t;
+
+typedef struct _fn_lcd_config_t {
+    uint16_t width;
+    uint16_t height;
+    uint16_t x_offset;
+    uint16_t y_offset;
+    uint16_t strip_height;
+    uint16_t tile_width;
+    uint16_t tile_height;
+    int16_t spi_id;
+    int16_t sck;
+    int16_t mosi;
+    int16_t miso;
+    int16_t cs;
+    int16_t dc;
+    int16_t rst;
+    int16_t backlight;
+    uint32_t baudrate;
+    size_t dma_chunk_size;
+} fn_lcd_config_t;
 
 typedef struct _fn_lcd_dma_context_t {
-    uint8_t *buffers[FN_LCD_DMA_BUFFER_COUNT];
+    uint8_t *dma_buffers[FN_LCD_DMA_BUFFER_COUNT];
+    uint8_t *strip_buffers[FN_LCD_STRIP_BUFFER_COUNT];
+    uint32_t *displayed_tile_hashes;
+    uint32_t *pending_tile_hashes;
+    fn_lcd_region_t *dirty_regions;
+    fn_lcd_config_t config;
     size_t chunk_size;
+    size_t strip_buffer_size;
+    size_t tile_columns;
+    size_t tile_rows;
+    size_t tile_count;
+    size_t dirty_region_count;
+    uint8_t next_strip_buffer;
+    bool displayed_frame_valid;
+    bool pending_frame_valid;
     uint32_t write_count;
     uint64_t byte_count;
     uint32_t transaction_count;
+    uint32_t scanned_frame_count;
+    uint32_t committed_frame_count;
+    uint32_t unchanged_frame_count;
+    uint32_t dropped_frame_count;
 } fn_lcd_dma_context_t;
 
-/** 初始化内部 DMA 双缓冲，并返回规范化后的单块容量。 */
+/** 按屏幕、脚位和分块方案初始化全部固件侧显示缓冲。 */
 esp_err_t fn_lcd_dma_init(fn_lcd_dma_context_t *context,
-    size_t requested_chunk_size, size_t *actual_chunk_size);
+    const fn_lcd_config_t *config, size_t *actual_chunk_size);
 
-/** 释放内部 DMA 双缓冲及其累计状态。 */
+/** 释放固件侧 DMA、条带、哈希和脏区记录缓冲。 */
 void fn_lcd_dma_deinit(fn_lcd_dma_context_t *context);
 
-/** 判断内部 DMA 双缓冲是否已经完成初始化。 */
+/** 判断完整画布传输引擎是否已经完成初始化。 */
 bool fn_lcd_dma_is_initialized(const fn_lcd_dma_context_t *context);
 
-/** 把像素数据分块复制到内部 RAM，并通过同一 SPI 设备排队发送。 */
+/** 兼容旧局部刷新接口，直接通过 DMA 双缓冲发送连续像素。 */
 esp_err_t fn_lcd_dma_write(fn_lcd_dma_context_t *context,
     spi_device_handle_t spi, const uint8_t *source, size_t length,
     uint32_t *completed_transactions);
+
+/** 检测完整画布变化并记录合并后的脏矩形。 */
+esp_err_t fn_lcd_dma_scan_dirty(fn_lcd_dma_context_t *context,
+    const uint8_t *frame, size_t frame_length, bool force,
+    size_t *region_count);
+
+/** 返回指定序号的待提交脏矩形。 */
+const fn_lcd_region_t *fn_lcd_dma_get_dirty_region(
+    const fn_lcd_dma_context_t *context, size_t index);
+
+/** 使用双条带缓冲交替整理矩形像素，再经 DMA 双缓冲发送。 */
+esp_err_t fn_lcd_dma_write_region(fn_lcd_dma_context_t *context,
+    spi_device_handle_t spi, const uint8_t *frame, size_t frame_length,
+    const fn_lcd_region_t *region, uint32_t *completed_transactions);
+
+/** 在全部脏区成功发送后提交本帧哈希基线。 */
+esp_err_t fn_lcd_dma_commit_frame(fn_lcd_dma_context_t *context);
+
+/** 放弃尚未完整发送的帧，并累计丢帧统计。 */
+void fn_lcd_dma_discard_frame(fn_lcd_dma_context_t *context);
 
 #endif

@@ -61,12 +61,38 @@ def _test_protocol():
 
 
 def _test_lcd_dma():
-    """验证 LCD 原生模块可以分配并释放内部 DMA 双缓冲。"""
-    assert fn_lcd.api_version() == 1
-    assert fn_lcd.init(4092) == 4092
+    """验证 LCD 原生模块可初始化完整方案并自动比较完整画布。"""
+    configuration = {
+        "width": 4,
+        "height": 3,
+        "spi_id": 2,
+        "sck": 12,
+        "mosi": 11,
+        "miso": 15,
+        "cs": 10,
+        "dc": 9,
+        "rst": 14,
+        "backlight": 13,
+        "baudrate": 40_000_000,
+        "dma_chunk_size": 4092,
+        "strip_height": 2,
+        "tile_width": 2,
+        "tile_height": 1,
+    }
+    assert fn_lcd.api_version() == 2
+    assert fn_lcd.init(configuration) == 4092
     stats = fn_lcd.stats()
     assert stats["chunk_size"] == 4092
+    assert stats["strip_buffer_size"] == 16
     assert stats["write_count"] == 0
+    frame = bytearray(4 * 3 * 2)
+    assert fn_lcd.dirty_regions(frame) == [(0, 0, 4, 3)]
+    fn_lcd.commit_frame()
+    assert fn_lcd.dirty_regions(frame) == []
+    fn_lcd.commit_frame()
+    frame[0:2] = b"\x12\x34"
+    assert fn_lcd.dirty_regions(frame) == [(0, 0, 2, 1)]
+    fn_lcd.discard_frame()
     fn_lcd.deinit()
     assert fn_lcd.stats()["chunk_size"] == 0
 
