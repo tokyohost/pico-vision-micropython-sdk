@@ -3,7 +3,6 @@
  */
 
 #include "py/obj.h"
-#include "py/objdict.h"
 #include "py/objlist.h"
 #include "py/runtime.h"
 #include "mphalport.h"
