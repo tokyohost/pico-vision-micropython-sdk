@@ -1,6 +1,7 @@
 """验证 ESP32-S3 固件内 fn-vision 原生模块的基本行为。"""
 
 import fn_canvas
+import fn_lcd
 import fn_protocol
 
 
@@ -59,11 +60,23 @@ def _test_protocol():
         raise AssertionError("损坏的 PV1 载荷未触发 CRC 异常")
 
 
+def _test_lcd_dma():
+    """验证 LCD 原生模块可以分配并释放内部 DMA 双缓冲。"""
+    assert fn_lcd.api_version() == 1
+    assert fn_lcd.init(4092) == 4092
+    stats = fn_lcd.stats()
+    assert stats["chunk_size"] == 4092
+    assert stats["write_count"] == 0
+    fn_lcd.deinit()
+    assert fn_lcd.stats()["chunk_size"] == 0
+
+
 def main():
     """执行全部原生模块冒烟测试。"""
     _test_canvas()
+    _test_lcd_dma()
     _test_protocol()
-    print("fn_canvas 与 fn_protocol ESP32-S3 冒烟测试通过")
+    print("fn_canvas、fn_lcd 与 fn_protocol ESP32-S3 冒烟测试通过")
 
 
 main()

@@ -475,6 +475,21 @@ spi_host_device_t machine_hw_spi_get_host(mp_obj_t in) {
     return self->host;
 }
 
+// 返回已经初始化的硬件 SPI 设备句柄，供同端口原生模块复用现有总线配置。
+spi_device_handle_t machine_hw_spi_get_device(mp_obj_t in) {
+    if (mp_obj_get_type(in) != &machine_spi_type) {
+        mp_raise_ValueError(MP_ERROR_TEXT("expecting a SPI object"));
+    }
+    machine_hw_spi_obj_t *self = (machine_hw_spi_obj_t *)in;
+    if (self->state != MACHINE_HW_SPI_STATE_INIT || self->spi == NULL) {
+        mp_raise_msg(
+            &mp_type_OSError,
+            MP_ERROR_TEXT("SPI device is not initialized")
+        );
+    }
+    return self->spi;
+}
+
 static const mp_machine_spi_p_t machine_hw_spi_p = {
     .init = machine_hw_spi_init,
     .deinit = machine_hw_spi_deinit,

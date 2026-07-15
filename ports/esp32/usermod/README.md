@@ -1,8 +1,9 @@
 # fn-vision ESP32-S3 原生模块
 
-本目录将 `fn_canvas`、`fn_protocol` 和 `_usb_cdc_data` 接入 MicroPython 的
-ESP32 CMake 构建。绘图和协议模块复用通用源码；数据 CDC 模块绑定 ESP32-S3
-固件内置的第二路 TinyUSB CDC。
+本目录将 `fn_canvas`、`fn_lcd`、`fn_protocol` 和 `_usb_cdc_data` 接入
+MicroPython 的 ESP32 CMake 构建。绘图和协议模块复用通用源码；`fn_lcd` 使用
+内部 DMA 双缓冲发送 PSRAM 像素；数据 CDC 模块绑定 ESP32-S3 固件内置的第二路
+TinyUSB CDC。
 
 ## 准备环境
 
@@ -46,7 +47,7 @@ make -C ports/esp32 \
 可避免 `USER_C_MODULES` 相对路径以主组件目录为基准时产生歧义。构建日志应包含：
 
 ```text
-Found User C Module(s): usermod_fn_canvas, usermod_fn_protocol, usermod_fn_usb_cdc
+Found User C Module(s): usermod_fn_canvas, usermod_fn_lcd, usermod_fn_protocol, usermod_fn_usb_cdc
 ```
 
 普通固件位于 `ports/esp32/build-ESP32_GENERIC_S3/firmware.bin`；N8R8 与 N16R8
@@ -68,16 +69,19 @@ make -C ports/esp32 \
 
 ```python
 import fn_canvas
+import fn_lcd
 import fn_protocol
 import _usb_cdc_data
 
 print(fn_canvas.api_version())
+print(fn_lcd.api_version())
+print(fn_lcd.init(4092))
 print(fn_protocol.api_version())
 print(_usb_cdc_data.api_version())
 print(_usb_cdc_data.init())
 ```
 
-当前带双语字体和原生双 CDC 的 ESP32-S3 固件应分别输出 `8`、`1`、`1` 和 `32768`。数据 CDC 的
+当前带双语字体、LCD DMA 和原生双 CDC 的 ESP32-S3 固件应依次输出 `8`、`1`、`4092`、`1`、`1` 和 `32768`。数据 CDC 的
 32 KB 接收环形缓冲由 `init()` 优先从 PSRAM 分配，PSRAM 不可用时才回退到内部 DRAM。`fn_canvas` 同时提供
 `font_glyph()` 与 `text_width()`，并内置 `wqy_8x16`、`fusion_pixel_8x16` 两套
 英文半角八像素、中文全角十六像素字体。完整设备端冒烟测试位于
@@ -90,4 +94,5 @@ mpremote connect /dev/ttyACM0 run ports/esp32/usermod/tests/smoke_test.py
 若只需单个模块，可将 `USER_C_MODULES` 分别指向以下文件的绝对路径：
 
 - `ports/esp32/usermod/fn_canvas/micropython.cmake`
+- `ports/esp32/usermod/fn_lcd/micropython.cmake`
 - `ports/esp32/usermod/fn_protocol/micropython.cmake`
