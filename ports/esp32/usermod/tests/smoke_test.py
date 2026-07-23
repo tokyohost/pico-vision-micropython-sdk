@@ -80,14 +80,16 @@ def _test_lcd_dma():
         "tile_height": 1,
         "sync_visible_frame_to_second": False,
     }
-    assert fn_lcd.api_version() == 3
+    assert fn_lcd.api_version() == 4
     assert fn_lcd.init(configuration) == 4092
     stats = fn_lcd.stats()
     assert stats["chunk_size"] == 4092
     assert stats["strip_buffer_size"] == 16
+    assert stats["frame_buffer_size"] == 24
     assert stats["write_count"] == 0
     assert stats["sync_visible_frame_to_second"] == 0
     assert stats["synchronized_frame_count"] == 0
+    assert stats["async_queued_frame_count"] == 0
     assert fn_lcd.set_visible_frame_second_sync(True)
     assert not fn_lcd.set_visible_frame_second_sync(True)
     assert fn_lcd.stats()["sync_visible_frame_to_second"] == 1

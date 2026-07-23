@@ -4,11 +4,14 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <sys/time.h>
 
+#include "driver/gpio.h"
 #include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "fn_lcd_dma.h"
@@ -77,13 +80,18 @@ static size_t fn_lcd_dma_find_free_buffer(
     return FN_LCD_DMA_BUFFER_COUNT;
 }
 
-/** 使用 FreeRTOS 粗等待和微秒忙等待对齐下一单调时钟整秒。 */
-static void fn_lcd_dma_wait_next_second(fn_lcd_dma_context_t *context) {
-    const int64_t now_us = esp_timer_get_time();
-    const int64_t target_us = (
-        now_us / FN_LCD_SECOND_US + 1LL
-    ) * FN_LCD_SECOND_US;
-    int64_t remaining_us = target_us - now_us;
+/** 把系统墙钟的下一整秒映射为不会回拨的单调时钟目标。 */
+static int64_t fn_lcd_dma_next_wall_second_target_us(void) {
+    struct timeval wall_time;
+    gettimeofday(&wall_time, NULL);
+    const int64_t remaining_us = FN_LCD_SECOND_US
+        - (int64_t)wall_time.tv_usec;
+    return esp_timer_get_time() + remaining_us;
+}
+
+/** 使用 FreeRTOS 粗等待和微秒忙等待命中指定单调时钟目标。 */
+static void fn_lcd_dma_wait_until(int64_t target_us) {
+    int64_t remaining_us = target_us - esp_timer_get_time();
     while (remaining_us > 2000LL) {
         const TickType_t delay_ticks = pdMS_TO_TICKS(
             (uint32_t)((remaining_us - 1000LL) / 1000LL)
@@ -98,22 +106,18 @@ static void fn_lcd_dma_wait_next_second(fn_lcd_dma_context_t *context) {
             remaining_us > 100LL ? 100LL : remaining_us
         ));
     }
-    context->pending_frame_sync_started = true;
-    context->last_sync_target_us = target_us;
 }
 
-/** 把一块连续条带通过内部 DMA 双缓冲排队发送。 */
-static esp_err_t fn_lcd_dma_write_contiguous(fn_lcd_dma_context_t *context,
+/** 在已经独占 SPI 总线时通过内部 DMA 双缓冲发送连续像素。 */
+static esp_err_t fn_lcd_dma_write_contiguous_locked(
+    fn_lcd_dma_context_t *context,
     spi_device_handle_t spi, const uint8_t *source, size_t length,
-    uint32_t *completed_transactions, bool synchronize_frame_start) {
+    uint32_t *completed_transactions, int64_t sync_target_us) {
     spi_transaction_t transactions[FN_LCD_DMA_BUFFER_COUNT];
     bool in_flight[FN_LCD_DMA_BUFFER_COUNT] = {false, false};
     uint32_t queued_count = 0;
     size_t offset = 0;
-    esp_err_t result = spi_device_acquire_bus(spi, portMAX_DELAY);
-    if (result != ESP_OK) {
-        return result;
-    }
+    esp_err_t result = ESP_OK;
     while (offset < length && result == ESP_OK) {
         if (queued_count == FN_LCD_DMA_BUFFER_COUNT) {
             result = fn_lcd_dma_wait_one(spi, in_flight, &queued_count);
@@ -136,14 +140,15 @@ static esp_err_t fn_lcd_dma_write_contiguous(fn_lcd_dma_context_t *context,
         transactions[index].length = chunk_length * 8U;
         transactions[index].tx_buffer = context->dma_buffers[index];
         transactions[index].user = (void *)(uintptr_t)index;
-        if (synchronize_frame_start && offset == 0) {
-            fn_lcd_dma_wait_next_second(context);
+        if (sync_target_us > 0 && offset == 0) {
+            fn_lcd_dma_wait_until(sync_target_us);
+            context->last_sync_target_us = sync_target_us;
         }
         result = spi_device_queue_trans(spi, &transactions[index], portMAX_DELAY);
         if (result != ESP_OK) {
             break;
         }
-        if (synchronize_frame_start && offset == 0) {
+        if (sync_target_us > 0 && offset == 0) {
             ++context->synchronized_frame_count;
             const int64_t error_us = esp_timer_get_time()
                 - context->last_sync_target_us;
@@ -165,6 +170,19 @@ static esp_err_t fn_lcd_dma_write_contiguous(fn_lcd_dma_context_t *context,
         }
         ++(*completed_transactions);
     }
+    return result;
+}
+
+/** 独占 SPI 总线并同步发送一块连续像素。 */
+static esp_err_t fn_lcd_dma_write_contiguous(fn_lcd_dma_context_t *context,
+    spi_device_handle_t spi, const uint8_t *source, size_t length,
+    uint32_t *completed_transactions) {
+    esp_err_t result = spi_device_acquire_bus(spi, portMAX_DELAY);
+    if (result != ESP_OK) {
+        return result;
+    }
+    result = fn_lcd_dma_write_contiguous_locked(
+        context, spi, source, length, completed_transactions, 0);
     spi_device_release_bus(spi);
     return result;
 }
@@ -179,13 +197,222 @@ esp_err_t fn_lcd_dma_write(fn_lcd_dma_context_t *context,
     }
     *completed_transactions = 0;
     const esp_err_t result = fn_lcd_dma_write_contiguous(
-        context, spi, source, length, completed_transactions, false);
+        context, spi, source, length, completed_transactions);
     if (result == ESP_OK) {
         ++context->write_count;
         context->byte_count += length;
         context->transaction_count += *completed_transactions;
     }
     return result;
+}
+
+/** 在已独占总线时发送一段 LCD 命令或参数。 */
+static esp_err_t fn_lcd_dma_send_control_locked(
+    const fn_lcd_dma_context_t *context, spi_device_handle_t spi,
+    bool data_mode, const uint8_t *data, size_t length) {
+    spi_transaction_t transaction = {
+        .length = length * 8U,
+        .tx_buffer = data,
+    };
+    gpio_set_level((gpio_num_t)context->config.dc, data_mode ? 1 : 0);
+    gpio_set_level((gpio_num_t)context->config.cs, 0);
+    const esp_err_t result = spi_device_polling_transmit(spi, &transaction);
+    gpio_set_level((gpio_num_t)context->config.cs, 1);
+    return result;
+}
+
+/** 在已独占总线时设置一个脏矩形对应的 LCD 显存窗口。 */
+static esp_err_t fn_lcd_dma_set_window_locked(
+    const fn_lcd_dma_context_t *context, spi_device_handle_t spi,
+    const fn_lcd_region_t *region) {
+    const uint16_t x0 = region->x + context->config.x_offset;
+    const uint16_t x1 = x0 + region->width - 1U;
+    const uint16_t y0 = region->y + context->config.y_offset;
+    const uint16_t y1 = y0 + region->height - 1U;
+    const uint8_t column_data[4] = {
+        (uint8_t)(x0 >> 8), (uint8_t)x0,
+        (uint8_t)(x1 >> 8), (uint8_t)x1,
+    };
+    const uint8_t row_data[4] = {
+        (uint8_t)(y0 >> 8), (uint8_t)y0,
+        (uint8_t)(y1 >> 8), (uint8_t)y1,
+    };
+    const uint8_t column_command = 0x2A;
+    const uint8_t row_command = 0x2B;
+    const uint8_t memory_write_command = 0x2C;
+    esp_err_t result = fn_lcd_dma_send_control_locked(
+        context, spi, false, &column_command, 1);
+    if (result == ESP_OK) {
+        result = fn_lcd_dma_send_control_locked(
+            context, spi, true, column_data, sizeof(column_data));
+    }
+    if (result == ESP_OK) {
+        result = fn_lcd_dma_send_control_locked(
+            context, spi, false, &row_command, 1);
+    }
+    if (result == ESP_OK) {
+        result = fn_lcd_dma_send_control_locked(
+            context, spi, true, row_data, sizeof(row_data));
+    }
+    if (result == ESP_OK) {
+        result = fn_lcd_dma_send_control_locked(
+            context, spi, false, &memory_write_command, 1);
+    }
+    return result;
+}
+
+/** 在原生任务中设置窗口并发送一个脏矩形。 */
+static esp_err_t fn_lcd_dma_write_region_async(
+    fn_lcd_dma_context_t *context, spi_device_handle_t spi,
+    const uint8_t *frame, const fn_lcd_region_t *region,
+    int64_t sync_target_us) {
+    esp_err_t result = spi_device_acquire_bus(spi, portMAX_DELAY);
+    if (result != ESP_OK) {
+        return result;
+    }
+    result = fn_lcd_dma_set_window_locked(context, spi, region);
+    uint32_t completed_transactions = 0;
+    const size_t frame_stride = (size_t)context->config.width * 2U;
+    const size_t region_stride = (size_t)region->width * 2U;
+    size_t row_offset = 0;
+    gpio_set_level((gpio_num_t)context->config.dc, 1);
+    gpio_set_level((gpio_num_t)context->config.cs, 0);
+    while (row_offset < region->height && result == ESP_OK) {
+        size_t rows = region->height - row_offset;
+        if (rows > context->config.strip_height) {
+            rows = context->config.strip_height;
+        }
+        uint8_t *strip = context->strip_buffers[context->next_strip_buffer];
+        context->next_strip_buffer = (context->next_strip_buffer + 1U)
+            % FN_LCD_STRIP_BUFFER_COUNT;
+        for (size_t row = 0; row < rows; ++row) {
+            const uint8_t *source = frame
+                + (region->y + row_offset + row) * frame_stride
+                + (size_t)region->x * 2U;
+            memcpy(strip + row * region_stride, source, region_stride);
+        }
+        const size_t byte_count = rows * region_stride;
+        result = fn_lcd_dma_write_contiguous_locked(
+            context, spi, strip, byte_count, &completed_transactions,
+            row_offset == 0 ? sync_target_us : 0);
+        if (result == ESP_OK) {
+            ++context->write_count;
+            context->byte_count += byte_count;
+        }
+        row_offset += rows;
+    }
+    gpio_set_level((gpio_num_t)context->config.cs, 1);
+    spi_device_release_bus(spi);
+    context->transaction_count += completed_transactions;
+    return result;
+}
+
+/** 从单槽邮箱取出截止整秒前的最新完整帧。 */
+static bool fn_lcd_dma_take_async_frame(fn_lcd_dma_context_t *context,
+    uint8_t **frame, spi_device_handle_t *spi, bool *force) {
+    bool available = false;
+    xSemaphoreTake(context->async_state_mutex, portMAX_DELAY);
+    if (!context->async_stop_requested
+        && context->config.sync_visible_frame_to_second
+        && context->async_pending_frame_index >= 0) {
+        context->async_active_frame_index =
+            context->async_pending_frame_index;
+        context->async_pending_frame_index = -1;
+        *frame = context->async_frame_buffers[
+            context->async_active_frame_index];
+        *spi = context->async_pending_spi;
+        *force = context->async_pending_force;
+        context->async_pending_force = false;
+        available = true;
+    }
+    xSemaphoreGive(context->async_state_mutex);
+    return available;
+}
+
+/** 提交原生任务已经在整秒边界发送完成的帧。 */
+static void fn_lcd_dma_finish_async_frame(
+    fn_lcd_dma_context_t *context, esp_err_t result) {
+    if (result == ESP_OK) {
+        result = fn_lcd_dma_commit_frame(context);
+    } else {
+        fn_lcd_dma_discard_frame(context);
+    }
+    xSemaphoreTake(context->async_state_mutex, portMAX_DELAY);
+    context->async_active_frame_index = -1;
+    if (result != ESP_OK) {
+        ++context->async_error_count;
+    }
+    xSemaphoreGive(context->async_state_mutex);
+}
+
+/** 在目标整秒发送一份已复制到原生缓冲的完整画布。 */
+static void fn_lcd_dma_transmit_async_frame(
+    fn_lcd_dma_context_t *context, uint8_t *frame,
+    spi_device_handle_t spi, bool force, int64_t target_us) {
+    size_t region_count = 0;
+    esp_err_t result = fn_lcd_dma_scan_dirty(
+        context, frame, context->frame_buffer_size, force, &region_count);
+    for (size_t index = 0; index < region_count && result == ESP_OK; ++index) {
+        const fn_lcd_region_t *region = fn_lcd_dma_get_dirty_region(
+            context, index);
+        result = fn_lcd_dma_write_region_async(
+            context, spi, frame, region, index == 0 ? target_us : 0);
+    }
+    fn_lcd_dma_finish_async_frame(context, result);
+}
+
+/** 等待到整秒准备窗口，并允许生产者在截止前持续覆盖待显示帧。 */
+static bool fn_lcd_dma_wait_async_prepare(
+    fn_lcd_dma_context_t *context, int64_t target_us) {
+    const int64_t prepare_us = target_us - FN_LCD_ASYNC_PREPARE_LEAD_US;
+    while (esp_timer_get_time() < prepare_us) {
+        if (context->async_stop_requested) {
+            return false;
+        }
+        int64_t remaining_us = prepare_us - esp_timer_get_time();
+        TickType_t delay_ticks = pdMS_TO_TICKS(
+            (uint32_t)(remaining_us / 1000LL));
+        ulTaskNotifyTake(
+            pdTRUE, delay_ticks > 0 ? delay_ticks : 1);
+    }
+    return !context->async_stop_requested;
+}
+
+/** 持续消费最新帧邮箱，并在墙钟整秒边界启动首笔像素 DMA。 */
+static void fn_lcd_dma_async_task(void *argument) {
+    fn_lcd_dma_context_t *context = argument;
+    while (!context->async_stop_requested) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        while (!context->async_stop_requested) {
+            xSemaphoreTake(context->async_state_mutex, portMAX_DELAY);
+            const bool has_pending =
+                context->async_pending_frame_index >= 0
+                && context->config.sync_visible_frame_to_second;
+            xSemaphoreGive(context->async_state_mutex);
+            if (!has_pending) {
+                break;
+            }
+            int64_t target_us = fn_lcd_dma_next_wall_second_target_us();
+            if (target_us - esp_timer_get_time()
+                <= FN_LCD_ASYNC_PREPARE_LEAD_US) {
+                target_us += FN_LCD_SECOND_US;
+            }
+            if (!fn_lcd_dma_wait_async_prepare(context, target_us)) {
+                break;
+            }
+            uint8_t *frame = NULL;
+            spi_device_handle_t spi = NULL;
+            bool force = false;
+            if (fn_lcd_dma_take_async_frame(
+                context, &frame, &spi, &force)) {
+                fn_lcd_dma_transmit_async_frame(
+                    context, frame, spi, force, target_us);
+            }
+        }
+    }
+    context->async_task_running = false;
+    context->async_task = NULL;
+    vTaskDelete(NULL);
 }
 
 /** 释放可能位于内部 SRAM 或 PSRAM 的单个能力分配缓冲。 */
@@ -206,9 +433,13 @@ esp_err_t fn_lcd_dma_init(fn_lcd_dma_context_t *context,
     }
     fn_lcd_dma_deinit(context);
     context->config = *config;
+    context->async_pending_frame_index = -1;
+    context->async_active_frame_index = -1;
     context->chunk_size = fn_lcd_dma_normalize_chunk_size(
         config->dma_chunk_size);
     context->config.dma_chunk_size = context->chunk_size;
+    context->frame_buffer_size = (size_t)config->width
+        * config->height * 2U;
     context->strip_buffer_size = (size_t)config->width
         * config->strip_height * 2U;
     context->tile_columns = (config->width + config->tile_width - 1U)
@@ -234,6 +465,16 @@ esp_err_t fn_lcd_dma_init(fn_lcd_dma_context_t *context,
             return ESP_ERR_NO_MEM;
         }
     }
+    for (size_t index = 0;
+        index < FN_LCD_ASYNC_FRAME_BUFFER_COUNT; ++index) {
+        context->async_frame_buffers[index] = heap_caps_malloc(
+            context->frame_buffer_size,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (context->async_frame_buffers[index] == NULL) {
+            fn_lcd_dma_deinit(context);
+            return ESP_ERR_NO_MEM;
+        }
+    }
     const size_t hash_bytes = context->tile_count * sizeof(uint32_t);
     context->displayed_tile_hashes = heap_caps_calloc(
         1, hash_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -248,17 +489,50 @@ esp_err_t fn_lcd_dma_init(fn_lcd_dma_context_t *context,
         fn_lcd_dma_deinit(context);
         return ESP_ERR_NO_MEM;
     }
+    context->async_state_mutex = xSemaphoreCreateMutex();
+    if (context->async_state_mutex == NULL) {
+        fn_lcd_dma_deinit(context);
+        return ESP_ERR_NO_MEM;
+    }
+    context->async_task_running = true;
+    const BaseType_t task_result = xTaskCreate(
+        fn_lcd_dma_async_task,
+        "fn_lcd_second",
+        FN_LCD_ASYNC_TASK_STACK_SIZE,
+        context,
+        tskIDLE_PRIORITY + 2,
+        &context->async_task);
+    if (task_result != pdPASS) {
+        context->async_task_running = false;
+        fn_lcd_dma_deinit(context);
+        return ESP_ERR_NO_MEM;
+    }
     *actual_chunk_size = context->chunk_size;
     return ESP_OK;
 }
 
 /** 释放固件侧 DMA、条带、哈希和脏区记录缓冲。 */
 void fn_lcd_dma_deinit(fn_lcd_dma_context_t *context) {
+    if (context->async_task != NULL) {
+        context->async_stop_requested = true;
+        xTaskNotifyGive(context->async_task);
+        while (context->async_task_running) {
+            vTaskDelay(1);
+        }
+    }
+    if (context->async_state_mutex != NULL) {
+        vSemaphoreDelete(context->async_state_mutex);
+        context->async_state_mutex = NULL;
+    }
     for (size_t index = 0; index < FN_LCD_DMA_BUFFER_COUNT; ++index) {
         fn_lcd_free_buffer((void **)&context->dma_buffers[index]);
     }
     for (size_t index = 0; index < FN_LCD_STRIP_BUFFER_COUNT; ++index) {
         fn_lcd_free_buffer((void **)&context->strip_buffers[index]);
+    }
+    for (size_t index = 0;
+        index < FN_LCD_ASYNC_FRAME_BUFFER_COUNT; ++index) {
+        fn_lcd_free_buffer((void **)&context->async_frame_buffers[index]);
     }
     fn_lcd_free_buffer((void **)&context->displayed_tile_hashes);
     fn_lcd_free_buffer((void **)&context->pending_tile_hashes);
@@ -271,18 +545,76 @@ bool fn_lcd_dma_is_initialized(const fn_lcd_dma_context_t *context) {
     return context->chunk_size > 0 && context->dma_buffers[0] != NULL
         && context->dma_buffers[1] != NULL && context->strip_buffers[0] != NULL
         && context->strip_buffers[1] != NULL
+        && context->async_frame_buffers[0] != NULL
+        && context->async_frame_buffers[1] != NULL
         && context->displayed_tile_hashes != NULL
         && context->pending_tile_hashes != NULL
-        && context->dirty_regions != NULL;
+        && context->dirty_regions != NULL
+        && context->async_state_mutex != NULL
+        && context->async_task_running;
 }
 
-/** 更新后续可见帧是否由原生 DMA 层自动对齐下一整秒。 */
+/** 更新整秒策略；每次切换样式都清除旧样式尚未显示的帧。 */
 bool fn_lcd_dma_set_visible_frame_second_sync(
     fn_lcd_dma_context_t *context, bool enabled) {
-    const bool changed =
-        context->config.sync_visible_frame_to_second != enabled;
+    xSemaphoreTake(context->async_state_mutex, portMAX_DELAY);
+    const bool changed = context->config.sync_visible_frame_to_second
+        != enabled;
+    if (context->async_pending_frame_index >= 0) {
+        context->async_pending_frame_index = -1;
+        context->async_pending_force = false;
+        ++context->dropped_frame_count;
+    }
     context->config.sync_visible_frame_to_second = enabled;
+    xSemaphoreGive(context->async_state_mutex);
+    if (context->async_task != NULL) {
+        xTaskNotifyGive(context->async_task);
+    }
+    while (true) {
+        xSemaphoreTake(context->async_state_mutex, portMAX_DELAY);
+        const bool active = context->async_active_frame_index >= 0;
+        xSemaphoreGive(context->async_state_mutex);
+        if (!active) {
+            break;
+        }
+        vTaskDelay(1);
+    }
     return changed;
+}
+
+/** 把最新完整画布复制进原生单槽邮箱，等待整秒任务自动提交。 */
+esp_err_t fn_lcd_dma_queue_synchronized_frame(
+    fn_lcd_dma_context_t *context, spi_device_handle_t spi,
+    const uint8_t *frame, size_t frame_length, bool force,
+    uint32_t *queued_sequence) {
+    if (!fn_lcd_dma_is_initialized(context) || spi == NULL || frame == NULL
+        || frame_length < context->frame_buffer_size
+        || queued_sequence == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    xSemaphoreTake(context->async_state_mutex, portMAX_DELAY);
+    if (!context->config.sync_visible_frame_to_second) {
+        xSemaphoreGive(context->async_state_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+    int8_t target_index = context->async_pending_frame_index;
+    if (target_index < 0) {
+        target_index = context->async_active_frame_index == 0 ? 1 : 0;
+    } else {
+        ++context->async_replaced_frame_count;
+        ++context->dropped_frame_count;
+    }
+    memcpy(context->async_frame_buffers[target_index],
+        frame, context->frame_buffer_size);
+    context->async_pending_frame_index = target_index;
+    context->async_pending_spi = spi;
+    context->async_pending_force =
+        context->async_pending_force || force;
+    ++context->async_queued_frame_count;
+    *queued_sequence = context->async_queued_frame_count;
+    xSemaphoreGive(context->async_state_mutex);
+    xTaskNotifyGive(context->async_task);
+    return ESP_OK;
 }
 
 /** 尝试把当前瓦片行脏区与上一行同位置矩形进行纵向合并。 */
@@ -355,7 +687,6 @@ esp_err_t fn_lcd_dma_scan_dirty(fn_lcd_dma_context_t *context,
         }
     }
     context->pending_frame_valid = true;
-    context->pending_frame_sync_started = false;
     if (context->dirty_region_count == 0) {
         ++context->unchanged_frame_count;
     }
@@ -405,12 +736,8 @@ esp_err_t fn_lcd_dma_write_region(fn_lcd_dma_context_t *context,
             memcpy(strip + row * region_stride, source, region_stride);
         }
         const size_t byte_count = rows * region_stride;
-        const bool synchronize_frame_start =
-            context->config.sync_visible_frame_to_second
-            && !context->pending_frame_sync_started;
         esp_err_t result = fn_lcd_dma_write_contiguous(
-            context, spi, strip, byte_count, completed_transactions,
-            synchronize_frame_start);
+            context, spi, strip, byte_count, completed_transactions);
         if (result != ESP_OK) {
             return result;
         }
@@ -432,7 +759,6 @@ esp_err_t fn_lcd_dma_commit_frame(fn_lcd_dma_context_t *context) {
     context->pending_tile_hashes = temporary;
     context->displayed_frame_valid = true;
     context->pending_frame_valid = false;
-    context->pending_frame_sync_started = false;
     context->dirty_region_count = 0;
     ++context->committed_frame_count;
     return ESP_OK;
@@ -442,7 +768,6 @@ esp_err_t fn_lcd_dma_commit_frame(fn_lcd_dma_context_t *context) {
 void fn_lcd_dma_discard_frame(fn_lcd_dma_context_t *context) {
     if (context->pending_frame_valid) {
         context->pending_frame_valid = false;
-        context->pending_frame_sync_started = false;
         context->dirty_region_count = 0;
         ++context->dropped_frame_count;
     }

@@ -9,7 +9,7 @@
 
 #include "fn_lcd_dma.h"
 
-#define FN_LCD_API_VERSION (3)
+#define FN_LCD_API_VERSION (4)
 
 static fn_lcd_dma_context_t fn_lcd_context;
 
@@ -149,6 +149,31 @@ static mp_obj_t fn_lcd_dirty_regions(size_t n_args, const mp_obj_t *args) {
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
     fn_lcd_dirty_regions_obj, 1, 2, fn_lcd_dirty_regions);
 
+/** 复制最新完整画布后立即返回，由原生任务在整秒边界自动提交。 */
+static mp_obj_t fn_lcd_queue_synchronized_frame(
+    size_t n_args, const mp_obj_t *args) {
+    if (!fn_lcd_dma_is_initialized(&fn_lcd_context)) {
+        mp_raise_msg(&mp_type_RuntimeError,
+            MP_ERROR_TEXT("fn_lcd is not initialized"));
+    }
+    mp_buffer_info_t frame;
+    mp_get_buffer_raise(args[1], &frame, MP_BUFFER_READ);
+    const bool force = n_args > 2 && mp_obj_is_true(args[2]);
+    const spi_device_handle_t spi = machine_hw_spi_get_device(args[0]);
+    uint32_t queued_sequence = 0;
+    esp_err_t result;
+    MP_THREAD_GIL_EXIT();
+    result = fn_lcd_dma_queue_synchronized_frame(
+        &fn_lcd_context, spi, frame.buf, frame.len,
+        force, &queued_sequence);
+    MP_THREAD_GIL_ENTER();
+    check_esp_err(result);
+    return mp_obj_new_int_from_uint(queued_sequence);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+    fn_lcd_queue_synchronized_frame_obj,
+    2, 3, fn_lcd_queue_synchronized_frame);
+
 /** 从完整画布提取一个脏矩形并通过内部双条带、双 DMA 缓冲发送。 */
 static mp_obj_t fn_lcd_write_region(size_t n_args, const mp_obj_t *args) {
     (void)n_args;
@@ -199,11 +224,12 @@ static MP_DEFINE_CONST_FUN_OBJ_0(fn_lcd_discard_frame_obj, fn_lcd_discard_frame)
 
 /** 返回缓冲容量、屏幕方案和脏区发送累计统计。 */
 static mp_obj_t fn_lcd_stats(void) {
-    mp_obj_t result = mp_obj_new_dict(28);
+    mp_obj_t result = mp_obj_new_dict(36);
     #define FN_LCD_STORE_UINT(name, value) mp_obj_dict_store(result, \
         MP_OBJ_NEW_QSTR(MP_QSTR_##name), mp_obj_new_int_from_ull(value))
     FN_LCD_STORE_UINT(chunk_size, fn_lcd_context.chunk_size);
     FN_LCD_STORE_UINT(strip_buffer_size, fn_lcd_context.strip_buffer_size);
+    FN_LCD_STORE_UINT(frame_buffer_size, fn_lcd_context.frame_buffer_size);
     FN_LCD_STORE_UINT(width, fn_lcd_context.config.width);
     FN_LCD_STORE_UINT(height, fn_lcd_context.config.height);
     FN_LCD_STORE_UINT(strip_height, fn_lcd_context.config.strip_height);
@@ -229,6 +255,16 @@ static mp_obj_t fn_lcd_stats(void) {
         fn_lcd_context.config.sync_visible_frame_to_second);
     FN_LCD_STORE_UINT(synchronized_frame_count,
         fn_lcd_context.synchronized_frame_count);
+    FN_LCD_STORE_UINT(async_queued_frame_count,
+        fn_lcd_context.async_queued_frame_count);
+    FN_LCD_STORE_UINT(async_replaced_frame_count,
+        fn_lcd_context.async_replaced_frame_count);
+    FN_LCD_STORE_UINT(async_error_count,
+        fn_lcd_context.async_error_count);
+    FN_LCD_STORE_UINT(async_frame_pending,
+        fn_lcd_context.async_pending_frame_index >= 0);
+    FN_LCD_STORE_UINT(async_frame_active,
+        fn_lcd_context.async_active_frame_index >= 0);
     FN_LCD_STORE_UINT(last_sync_target_us,
         fn_lcd_context.last_sync_target_us);
     FN_LCD_STORE_UINT(last_sync_error_us,
@@ -247,6 +283,8 @@ static const mp_rom_map_elem_t fn_lcd_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_deinit), MP_ROM_PTR(&fn_lcd_deinit_obj) },
     { MP_ROM_QSTR(MP_QSTR_write), MP_ROM_PTR(&fn_lcd_write_obj) },
     { MP_ROM_QSTR(MP_QSTR_dirty_regions), MP_ROM_PTR(&fn_lcd_dirty_regions_obj) },
+    { MP_ROM_QSTR(MP_QSTR_queue_synchronized_frame),
+        MP_ROM_PTR(&fn_lcd_queue_synchronized_frame_obj) },
     { MP_ROM_QSTR(MP_QSTR_write_region), MP_ROM_PTR(&fn_lcd_write_region_obj) },
     { MP_ROM_QSTR(MP_QSTR_commit_frame), MP_ROM_PTR(&fn_lcd_commit_frame_obj) },
     { MP_ROM_QSTR(MP_QSTR_discard_frame), MP_ROM_PTR(&fn_lcd_discard_frame_obj) },
