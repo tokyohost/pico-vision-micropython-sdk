@@ -18,6 +18,7 @@
 #define FN_LCD_DEFAULT_STRIP_HEIGHT (40)
 #define FN_LCD_DEFAULT_TILE_WIDTH (16)
 #define FN_LCD_DEFAULT_TILE_HEIGHT (8)
+#define FN_LCD_SECOND_US (1000000LL)
 
 typedef struct _fn_lcd_region_t {
     uint16_t x;
@@ -44,6 +45,7 @@ typedef struct _fn_lcd_config_t {
     int16_t backlight;
     uint32_t baudrate;
     size_t dma_chunk_size;
+    bool sync_visible_frame_to_second;
 } fn_lcd_config_t;
 
 typedef struct _fn_lcd_dma_context_t {
@@ -62,6 +64,7 @@ typedef struct _fn_lcd_dma_context_t {
     uint8_t next_strip_buffer;
     bool displayed_frame_valid;
     bool pending_frame_valid;
+    bool pending_frame_sync_started;
     uint32_t write_count;
     uint64_t byte_count;
     uint32_t transaction_count;
@@ -69,6 +72,9 @@ typedef struct _fn_lcd_dma_context_t {
     uint32_t committed_frame_count;
     uint32_t unchanged_frame_count;
     uint32_t dropped_frame_count;
+    uint32_t synchronized_frame_count;
+    int64_t last_sync_target_us;
+    int32_t last_sync_error_us;
 } fn_lcd_dma_context_t;
 
 /** 按屏幕、脚位和分块方案初始化全部固件侧显示缓冲。 */

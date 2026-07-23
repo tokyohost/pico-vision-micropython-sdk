@@ -9,7 +9,7 @@
 
 #include "fn_lcd_dma.h"
 
-#define FN_LCD_API_VERSION (2)
+#define FN_LCD_API_VERSION (3)
 
 static fn_lcd_dma_context_t fn_lcd_context;
 
@@ -25,6 +25,15 @@ static int fn_lcd_config_int_default(mp_obj_t config, qstr key,
     mp_map_elem_t *element = mp_map_lookup(
         &dictionary->map, MP_OBJ_NEW_QSTR(key), MP_MAP_LOOKUP);
     return element == NULL ? default_value : mp_obj_get_int(element->value);
+}
+
+/** 从初始化字典读取允许使用默认值的布尔开关。 */
+static bool fn_lcd_config_bool_default(mp_obj_t config, qstr key,
+    bool default_value) {
+    mp_obj_dict_t *dictionary = MP_OBJ_TO_PTR(config);
+    mp_map_elem_t *element = mp_map_lookup(
+        &dictionary->map, MP_OBJ_NEW_QSTR(key), MP_MAP_LOOKUP);
+    return element == NULL ? default_value : mp_obj_is_true(element->value);
 }
 
 /** 返回 fn_lcd 原生模块接口版本。 */
@@ -62,6 +71,8 @@ static mp_obj_t fn_lcd_init(mp_obj_t config_in) {
         .baudrate = fn_lcd_config_int(config_in, MP_QSTR_baudrate),
         .dma_chunk_size = fn_lcd_config_int_default(
             config_in, MP_QSTR_dma_chunk_size, FN_LCD_DMA_MAX_CHUNK_SIZE),
+        .sync_visible_frame_to_second = fn_lcd_config_bool_default(
+            config_in, MP_QSTR_sync_visible_frame_to_second, false),
     };
     size_t actual_chunk_size = 0;
     check_esp_err(fn_lcd_dma_init(
@@ -141,13 +152,18 @@ static mp_obj_t fn_lcd_write_region(size_t n_args, const mp_obj_t *args) {
         .height = mp_obj_get_int(args[5]),
     };
     uint32_t completed_transactions = 0;
-    check_esp_err(fn_lcd_dma_write_region(
+    spi_device_handle_t spi = machine_hw_spi_get_device(args[0]);
+    esp_err_t result;
+    MP_THREAD_GIL_EXIT();
+    result = fn_lcd_dma_write_region(
         &fn_lcd_context,
-        machine_hw_spi_get_device(args[0]),
+        spi,
         frame.buf,
         frame.len,
         &region,
-        &completed_transactions));
+        &completed_transactions);
+    MP_THREAD_GIL_ENTER();
+    check_esp_err(result);
     return mp_obj_new_int_from_uint(
         (size_t)region.width * region.height * 2U);
 }
@@ -170,7 +186,7 @@ static MP_DEFINE_CONST_FUN_OBJ_0(fn_lcd_discard_frame_obj, fn_lcd_discard_frame)
 
 /** 返回缓冲容量、屏幕方案和脏区发送累计统计。 */
 static mp_obj_t fn_lcd_stats(void) {
-    mp_obj_t result = mp_obj_new_dict(24);
+    mp_obj_t result = mp_obj_new_dict(28);
     #define FN_LCD_STORE_UINT(name, value) mp_obj_dict_store(result, \
         MP_OBJ_NEW_QSTR(MP_QSTR_##name), mp_obj_new_int_from_ull(value))
     FN_LCD_STORE_UINT(chunk_size, fn_lcd_context.chunk_size);
@@ -196,6 +212,14 @@ static mp_obj_t fn_lcd_stats(void) {
     FN_LCD_STORE_UINT(unchanged_frame_count, fn_lcd_context.unchanged_frame_count);
     FN_LCD_STORE_UINT(dropped_frame_count, fn_lcd_context.dropped_frame_count);
     FN_LCD_STORE_UINT(dirty_region_count, fn_lcd_context.dirty_region_count);
+    FN_LCD_STORE_UINT(sync_visible_frame_to_second,
+        fn_lcd_context.config.sync_visible_frame_to_second);
+    FN_LCD_STORE_UINT(synchronized_frame_count,
+        fn_lcd_context.synchronized_frame_count);
+    FN_LCD_STORE_UINT(last_sync_target_us,
+        fn_lcd_context.last_sync_target_us);
+    FN_LCD_STORE_UINT(last_sync_error_us,
+        fn_lcd_context.last_sync_error_us);
     #undef FN_LCD_STORE_UINT
     return result;
 }

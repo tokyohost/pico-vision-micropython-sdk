@@ -82,12 +82,20 @@ print(_usb_cdc_data.init())
 ```
 
 当前带双语字体、完整画布 LCD DMA 和原生双 CDC 的 ESP32-S3 固件应依次输出
-`8`、`2`、`1`、`1` 和 `32768`。`fn_lcd.init()` 的屏幕、脚位和缓冲配置示例已
+`8`、`3`、`1`、`1` 和 `32768`。`fn_lcd.init()` 的屏幕、脚位和缓冲配置示例已
 包含在设备端冒烟测试中，不应再使用 API 1 的单整数初始化方式。数据 CDC 的
 32 KB 接收环形缓冲由 `init()` 优先从 PSRAM 分配，PSRAM 不可用时才回退到内部 DRAM。`fn_canvas` 同时提供
 `font_glyph()` 与 `text_width()`，并内置 `wqy_8x16`、`fusion_pixel_8x16` 两套
-英文半角八像素、中文全角十六像素字体。完整设备端冒烟测试位于
-`ports/esp32/usermod/tests/smoke_test.py`，可使用 `mpremote` 执行：
+英文半角八像素、中文全角十六像素字体。
+
+`fn_lcd` API 3 的初始化字典可设置 `sync_visible_frame_to_second`。开启后，
+脏区扫描和首块 DMA 缓冲复制仍会立即完成，但第一笔像素事务会由原生层使用
+`esp_timer` 门控到下一单调时钟整秒。`stats()` 中的
+`synchronized_frame_count`、`last_sync_target_us` 和 `last_sync_error_us`
+可用于核对底层实际同步次数与首笔事务排队误差。
+
+完整设备端冒烟测试位于 `ports/esp32/usermod/tests/smoke_test.py`，可使用
+`mpremote` 执行：
 
 ```sh
 mpremote connect /dev/ttyACM0 run ports/esp32/usermod/tests/smoke_test.py

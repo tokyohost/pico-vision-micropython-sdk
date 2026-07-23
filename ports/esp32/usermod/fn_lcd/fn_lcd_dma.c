@@ -6,6 +6,10 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "esp_rom_sys.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "fn_lcd_dma.h"
 
@@ -73,10 +77,35 @@ static size_t fn_lcd_dma_find_free_buffer(
     return FN_LCD_DMA_BUFFER_COUNT;
 }
 
+/** 使用 FreeRTOS 粗等待和微秒忙等待对齐下一单调时钟整秒。 */
+static void fn_lcd_dma_wait_next_second(fn_lcd_dma_context_t *context) {
+    const int64_t now_us = esp_timer_get_time();
+    const int64_t target_us = (
+        now_us / FN_LCD_SECOND_US + 1LL
+    ) * FN_LCD_SECOND_US;
+    int64_t remaining_us = target_us - now_us;
+    while (remaining_us > 2000LL) {
+        const TickType_t delay_ticks = pdMS_TO_TICKS(
+            (uint32_t)((remaining_us - 1000LL) / 1000LL)
+        );
+        if (delay_ticks > 0) {
+            vTaskDelay(delay_ticks);
+        }
+        remaining_us = target_us - esp_timer_get_time();
+    }
+    while ((remaining_us = target_us - esp_timer_get_time()) > 0) {
+        esp_rom_delay_us((uint32_t)(
+            remaining_us > 100LL ? 100LL : remaining_us
+        ));
+    }
+    context->pending_frame_sync_started = true;
+    context->last_sync_target_us = target_us;
+}
+
 /** 把一块连续条带通过内部 DMA 双缓冲排队发送。 */
 static esp_err_t fn_lcd_dma_write_contiguous(fn_lcd_dma_context_t *context,
     spi_device_handle_t spi, const uint8_t *source, size_t length,
-    uint32_t *completed_transactions) {
+    uint32_t *completed_transactions, bool synchronize_frame_start) {
     spi_transaction_t transactions[FN_LCD_DMA_BUFFER_COUNT];
     bool in_flight[FN_LCD_DMA_BUFFER_COUNT] = {false, false};
     uint32_t queued_count = 0;
@@ -107,9 +136,19 @@ static esp_err_t fn_lcd_dma_write_contiguous(fn_lcd_dma_context_t *context,
         transactions[index].length = chunk_length * 8U;
         transactions[index].tx_buffer = context->dma_buffers[index];
         transactions[index].user = (void *)(uintptr_t)index;
+        if (synchronize_frame_start && offset == 0) {
+            fn_lcd_dma_wait_next_second(context);
+        }
         result = spi_device_queue_trans(spi, &transactions[index], portMAX_DELAY);
         if (result != ESP_OK) {
             break;
+        }
+        if (synchronize_frame_start && offset == 0) {
+            ++context->synchronized_frame_count;
+            const int64_t error_us = esp_timer_get_time()
+                - context->last_sync_target_us;
+            context->last_sync_error_us = error_us > INT32_MAX
+                ? INT32_MAX : (int32_t)error_us;
         }
         in_flight[index] = true;
         ++queued_count;
@@ -140,7 +179,7 @@ esp_err_t fn_lcd_dma_write(fn_lcd_dma_context_t *context,
     }
     *completed_transactions = 0;
     const esp_err_t result = fn_lcd_dma_write_contiguous(
-        context, spi, source, length, completed_transactions);
+        context, spi, source, length, completed_transactions, false);
     if (result == ESP_OK) {
         ++context->write_count;
         context->byte_count += length;
@@ -307,6 +346,7 @@ esp_err_t fn_lcd_dma_scan_dirty(fn_lcd_dma_context_t *context,
         }
     }
     context->pending_frame_valid = true;
+    context->pending_frame_sync_started = false;
     if (context->dirty_region_count == 0) {
         ++context->unchanged_frame_count;
     }
@@ -356,8 +396,12 @@ esp_err_t fn_lcd_dma_write_region(fn_lcd_dma_context_t *context,
             memcpy(strip + row * region_stride, source, region_stride);
         }
         const size_t byte_count = rows * region_stride;
+        const bool synchronize_frame_start =
+            context->config.sync_visible_frame_to_second
+            && !context->pending_frame_sync_started;
         esp_err_t result = fn_lcd_dma_write_contiguous(
-            context, spi, strip, byte_count, completed_transactions);
+            context, spi, strip, byte_count, completed_transactions,
+            synchronize_frame_start);
         if (result != ESP_OK) {
             return result;
         }
@@ -379,6 +423,7 @@ esp_err_t fn_lcd_dma_commit_frame(fn_lcd_dma_context_t *context) {
     context->pending_tile_hashes = temporary;
     context->displayed_frame_valid = true;
     context->pending_frame_valid = false;
+    context->pending_frame_sync_started = false;
     context->dirty_region_count = 0;
     ++context->committed_frame_count;
     return ESP_OK;
@@ -388,6 +433,7 @@ esp_err_t fn_lcd_dma_commit_frame(fn_lcd_dma_context_t *context) {
 void fn_lcd_dma_discard_frame(fn_lcd_dma_context_t *context) {
     if (context->pending_frame_valid) {
         context->pending_frame_valid = false;
+        context->pending_frame_sync_started = false;
         context->dirty_region_count = 0;
         ++context->dropped_frame_count;
     }
