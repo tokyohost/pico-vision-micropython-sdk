@@ -88,9 +88,10 @@ print(_usb_cdc_data.init())
 `font_glyph()` 与 `text_width()`，并内置 `wqy_8x16`、`fusion_pixel_8x16` 两套
 英文半角八像素、中文全角十六像素字体。
 
-`fn_lcd` API 3 的初始化字典可设置 `sync_visible_frame_to_second`。开启后，
-脏区扫描和首块 DMA 缓冲复制仍会立即完成，但第一笔像素事务会由原生层使用
-`esp_timer` 门控到下一单调时钟整秒。`stats()` 中的
+`fn_lcd` API 3 提供 `set_visible_frame_second_sync(enabled)`，允许上层在
+切换 Style 时立即更新后续帧策略。开启后，脏区扫描和首块 DMA 缓冲复制仍会
+立即完成，但第一笔像素事务会由原生层使用 `esp_timer` 门控到下一单调时钟整秒。
+初始化字典中的 `sync_visible_frame_to_second` 仅作为初始默认值。`stats()` 中的
 `synchronized_frame_count`、`last_sync_target_us` 和 `last_sync_error_us`
 可用于核对底层实际同步次数与首笔事务排队误差。
 

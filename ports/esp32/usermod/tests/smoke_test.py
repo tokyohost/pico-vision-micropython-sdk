@@ -88,6 +88,10 @@ def _test_lcd_dma():
     assert stats["write_count"] == 0
     assert stats["sync_visible_frame_to_second"] == 0
     assert stats["synchronized_frame_count"] == 0
+    assert fn_lcd.set_visible_frame_second_sync(True)
+    assert not fn_lcd.set_visible_frame_second_sync(True)
+    assert fn_lcd.stats()["sync_visible_frame_to_second"] == 1
+    assert fn_lcd.set_visible_frame_second_sync(False)
     frame = bytearray(4 * 3 * 2)
     assert fn_lcd.dirty_regions(frame) == [(0, 0, 4, 3)]
     fn_lcd.commit_frame()

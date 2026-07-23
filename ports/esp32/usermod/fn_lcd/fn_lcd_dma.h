@@ -87,6 +87,10 @@ void fn_lcd_dma_deinit(fn_lcd_dma_context_t *context);
 /** 判断完整画布传输引擎是否已经完成初始化。 */
 bool fn_lcd_dma_is_initialized(const fn_lcd_dma_context_t *context);
 
+/** 更新后续可见帧是否由原生 DMA 层自动对齐下一整秒。 */
+bool fn_lcd_dma_set_visible_frame_second_sync(
+    fn_lcd_dma_context_t *context, bool enabled);
+
 /** 兼容旧局部刷新接口，直接通过 DMA 双缓冲发送连续像素。 */
 esp_err_t fn_lcd_dma_write(fn_lcd_dma_context_t *context,
     spi_device_handle_t spi, const uint8_t *source, size_t length,

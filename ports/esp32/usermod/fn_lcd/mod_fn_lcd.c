@@ -81,6 +81,19 @@ static mp_obj_t fn_lcd_init(mp_obj_t config_in) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(fn_lcd_init_obj, fn_lcd_init);
 
+/** 设置后续可见帧是否在原生 DMA 层自动对齐下一整秒。 */
+static mp_obj_t fn_lcd_set_visible_frame_second_sync(mp_obj_t enabled_in) {
+    if (!fn_lcd_dma_is_initialized(&fn_lcd_context)) {
+        mp_raise_msg(&mp_type_RuntimeError,
+            MP_ERROR_TEXT("fn_lcd is not initialized"));
+    }
+    return mp_obj_new_bool(fn_lcd_dma_set_visible_frame_second_sync(
+        &fn_lcd_context, mp_obj_is_true(enabled_in)));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(
+    fn_lcd_set_visible_frame_second_sync_obj,
+    fn_lcd_set_visible_frame_second_sync);
+
 /** 释放 fn_lcd 占用的全部固件侧缓冲。 */
 static mp_obj_t fn_lcd_deinit(void) {
     fn_lcd_dma_deinit(&fn_lcd_context);
@@ -229,6 +242,8 @@ static const mp_rom_map_elem_t fn_lcd_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_fn_lcd) },
     { MP_ROM_QSTR(MP_QSTR_api_version), MP_ROM_PTR(&fn_lcd_api_version_obj) },
     { MP_ROM_QSTR(MP_QSTR_init), MP_ROM_PTR(&fn_lcd_init_obj) },
+    { MP_ROM_QSTR(MP_QSTR_set_visible_frame_second_sync),
+        MP_ROM_PTR(&fn_lcd_set_visible_frame_second_sync_obj) },
     { MP_ROM_QSTR(MP_QSTR_deinit), MP_ROM_PTR(&fn_lcd_deinit_obj) },
     { MP_ROM_QSTR(MP_QSTR_write), MP_ROM_PTR(&fn_lcd_write_obj) },
     { MP_ROM_QSTR(MP_QSTR_dirty_regions), MP_ROM_PTR(&fn_lcd_dirty_regions_obj) },

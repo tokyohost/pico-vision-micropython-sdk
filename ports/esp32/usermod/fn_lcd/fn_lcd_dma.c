@@ -276,6 +276,15 @@ bool fn_lcd_dma_is_initialized(const fn_lcd_dma_context_t *context) {
         && context->dirty_regions != NULL;
 }
 
+/** 更新后续可见帧是否由原生 DMA 层自动对齐下一整秒。 */
+bool fn_lcd_dma_set_visible_frame_second_sync(
+    fn_lcd_dma_context_t *context, bool enabled) {
+    const bool changed =
+        context->config.sync_visible_frame_to_second != enabled;
+    context->config.sync_visible_frame_to_second = enabled;
+    return changed;
+}
+
 /** 尝试把当前瓦片行脏区与上一行同位置矩形进行纵向合并。 */
 static bool fn_lcd_merge_vertical_region(fn_lcd_dma_context_t *context,
     const fn_lcd_region_t *region) {
