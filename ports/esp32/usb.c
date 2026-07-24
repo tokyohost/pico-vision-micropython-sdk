@@ -54,8 +54,15 @@ void usb_phy_init(void) {
 
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
 void usb_usj_mode(void) {
-    // Switch the USB PHY back to Serial/Jtag mode, disabling OTG support
-    // This should be run before jumping to bootloader.
+    // 双 CDC 固件关闭了运行时 USB，软复位清理函数不会主动断开 TinyUSB。
+    // 必须先通知主机设备离线并留出总线复位时间，再释放 OTG PHY；否则仍有
+    // 端点传输时直接切换控制器，ESP32-S3 可能停在 PHY 释放阶段而无法重枚举。
+    if (tusb_inited()) {
+        tud_disconnect();
+        mp_hal_delay_ms(50);
+    }
+
+    // 切回 ROM 下载器使用的 USB Serial/JTAG 控制器。
     usb_del_phy(phy_hdl);
     usb_phy_config_t phy_conf = {
         .controller = USB_PHY_CTRL_SERIAL_JTAG,
