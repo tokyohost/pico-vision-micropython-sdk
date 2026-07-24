@@ -78,22 +78,13 @@ def _test_lcd_dma():
         "strip_height": 2,
         "tile_width": 2,
         "tile_height": 1,
-        "sync_visible_frame_to_second": False,
     }
-    assert fn_lcd.api_version() == 4
+    assert fn_lcd.api_version() == 2
     assert fn_lcd.init(configuration) == 4092
     stats = fn_lcd.stats()
     assert stats["chunk_size"] == 4092
     assert stats["strip_buffer_size"] == 16
-    assert stats["frame_buffer_size"] == 24
     assert stats["write_count"] == 0
-    assert stats["sync_visible_frame_to_second"] == 0
-    assert stats["synchronized_frame_count"] == 0
-    assert stats["async_queued_frame_count"] == 0
-    assert fn_lcd.set_visible_frame_second_sync(True)
-    assert not fn_lcd.set_visible_frame_second_sync(True)
-    assert fn_lcd.stats()["sync_visible_frame_to_second"] == 1
-    assert fn_lcd.set_visible_frame_second_sync(False)
     frame = bytearray(4 * 3 * 2)
     assert fn_lcd.dirty_regions(frame) == [(0, 0, 4, 3)]
     fn_lcd.commit_frame()
@@ -101,9 +92,6 @@ def _test_lcd_dma():
     fn_lcd.commit_frame()
     frame[0:2] = b"\x12\x34"
     assert fn_lcd.dirty_regions(frame) == [(0, 0, 2, 1)]
-    fn_lcd.discard_frame()
-    frame[16:18] = b"\x56\x78"
-    assert fn_lcd.dirty_regions(frame) == [(0, 0, 2, 3)]
     fn_lcd.discard_frame()
     fn_lcd.deinit()
     assert fn_lcd.stats()["chunk_size"] == 0

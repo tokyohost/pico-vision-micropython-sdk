@@ -58,6 +58,11 @@ void usb_usj_mode(void) {
     // 必须先通知主机设备离线并留出总线复位时间，再释放 OTG PHY；否则仍有
     // 端点传输时直接切换控制器，ESP32-S3 可能停在 PHY 释放阶段而无法重枚举。
     if (tusb_inited()) {
+        // 定制固件同时启用控制 CDC 和数据 CDC。清空两路软件
+        // 发送 FIFO，避免第二路 CDC 仍持有已释放 PHY 的端点事务。
+        for (uint8_t interface = 0; interface < CFG_TUD_CDC; ++interface) {
+            tud_cdc_n_write_clear(interface);
+        }
         tud_disconnect();
         mp_hal_delay_ms(50);
     }

@@ -82,26 +82,12 @@ print(_usb_cdc_data.init())
 ```
 
 当前带双语字体、完整画布 LCD DMA 和原生双 CDC 的 ESP32-S3 固件应依次输出
-`8`、`4`、`1`、`1` 和 `32768`。`fn_lcd.init()` 的屏幕、脚位和缓冲配置示例已
+`8`、`2`、`1`、`1` 和 `32768`。`fn_lcd.init()` 的屏幕、脚位和缓冲配置示例已
 包含在设备端冒烟测试中，不应再使用 API 1 的单整数初始化方式。数据 CDC 的
 32 KB 接收环形缓冲由 `init()` 优先从 PSRAM 分配，PSRAM 不可用时才回退到内部 DRAM。`fn_canvas` 同时提供
 `font_glyph()` 与 `text_width()`，并内置 `wqy_8x16`、`fusion_pixel_8x16` 两套
-英文半角八像素、中文全角十六像素字体。
-
-`fn_lcd` API 4 提供 `set_visible_frame_second_sync(enabled)` 和
-`queue_synchronized_frame(spi, frame, force=False)`。开启后，调用方只把最新完整
-画布复制到两块 PSRAM 帧槽中的待显示槽并立即返回；后续画布会覆盖旧待显示帧，
-但不会改写正在发送的活动帧。原生 FreeRTOS 任务在墙钟整秒前取走最新帧，按当前
-已显示哈希重新计算脏区，并在面积增量可控时合并碎片脏区。任务先等待整秒边界，
-再占用 SPI、发送 LCD 窗口命令并立即启动第一笔像素 DMA，避免等待期间保持 CS
-有效而产生可见的分段扫描残影。初始化字典中的 `sync_visible_frame_to_second`
-仅作为初始默认值。
-`stats()` 中的 `async_queued_frame_count`、`async_replaced_frame_count`、
-`async_error_count`、`synchronized_frame_count`、`last_sync_target_us` 和
-`last_sync_error_us` 可用于核对邮箱覆盖、底层同步次数与首笔事务排队误差。
-
-完整设备端冒烟测试位于 `ports/esp32/usermod/tests/smoke_test.py`，可使用
-`mpremote` 执行：
+英文半角八像素、中文全角十六像素字体。完整设备端冒烟测试位于
+`ports/esp32/usermod/tests/smoke_test.py`，可使用 `mpremote` 执行：
 
 ```sh
 mpremote connect /dev/ttyACM0 run ports/esp32/usermod/tests/smoke_test.py
