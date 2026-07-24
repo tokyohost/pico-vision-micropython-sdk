@@ -18,6 +18,7 @@
 #define FN_LCD_DEFAULT_STRIP_HEIGHT (40)
 #define FN_LCD_DEFAULT_TILE_WIDTH (16)
 #define FN_LCD_DEFAULT_TILE_HEIGHT (8)
+#define FN_LCD_DIRTY_MERGE_AREA_RATIO (2)
 
 typedef struct _fn_lcd_region_t {
     uint16_t x;

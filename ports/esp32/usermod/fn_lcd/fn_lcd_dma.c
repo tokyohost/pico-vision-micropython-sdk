@@ -74,17 +74,15 @@ static size_t fn_lcd_dma_find_free_buffer(
 }
 
 /** 把一块连续条带通过内部 DMA 双缓冲排队发送。 */
-static esp_err_t fn_lcd_dma_write_contiguous(fn_lcd_dma_context_t *context,
+static esp_err_t fn_lcd_dma_write_contiguous_locked(
+    fn_lcd_dma_context_t *context,
     spi_device_handle_t spi, const uint8_t *source, size_t length,
     uint32_t *completed_transactions) {
     spi_transaction_t transactions[FN_LCD_DMA_BUFFER_COUNT];
     bool in_flight[FN_LCD_DMA_BUFFER_COUNT] = {false, false};
     uint32_t queued_count = 0;
     size_t offset = 0;
-    esp_err_t result = spi_device_acquire_bus(spi, portMAX_DELAY);
-    if (result != ESP_OK) {
-        return result;
-    }
+    esp_err_t result = ESP_OK;
     while (offset < length && result == ESP_OK) {
         if (queued_count == FN_LCD_DMA_BUFFER_COUNT) {
             result = fn_lcd_dma_wait_one(spi, in_flight, &queued_count);
@@ -126,6 +124,19 @@ static esp_err_t fn_lcd_dma_write_contiguous(fn_lcd_dma_context_t *context,
         }
         ++(*completed_transactions);
     }
+    return result;
+}
+
+/** 独占 SPI 总线并连续发送一块像素数据。 */
+static esp_err_t fn_lcd_dma_write_contiguous(fn_lcd_dma_context_t *context,
+    spi_device_handle_t spi, const uint8_t *source, size_t length,
+    uint32_t *completed_transactions) {
+    esp_err_t result = spi_device_acquire_bus(spi, portMAX_DELAY);
+    if (result != ESP_OK) {
+        return result;
+    }
+    result = fn_lcd_dma_write_contiguous_locked(
+        context, spi, source, length, completed_transactions);
     spi_device_release_bus(spi);
     return result;
 }
@@ -254,6 +265,48 @@ static bool fn_lcd_merge_vertical_region(fn_lcd_dma_context_t *context,
     return false;
 }
 
+/** 在传输面积增量可控时合并密集碎片，减少大字体的分段扫描间隙。 */
+static void fn_lcd_merge_fragmented_regions(fn_lcd_dma_context_t *context) {
+    if (context->dirty_region_count < 2) {
+        return;
+    }
+    uint16_t left = context->config.width;
+    uint16_t top = context->config.height;
+    uint16_t right = 0;
+    uint16_t bottom = 0;
+    size_t dirty_area = 0;
+    for (size_t index = 0; index < context->dirty_region_count; ++index) {
+        const fn_lcd_region_t *region = &context->dirty_regions[index];
+        if (region->x < left) {
+            left = region->x;
+        }
+        if (region->y < top) {
+            top = region->y;
+        }
+        if (region->x + region->width > right) {
+            right = region->x + region->width;
+        }
+        if (region->y + region->height > bottom) {
+            bottom = region->y + region->height;
+        }
+        dirty_area += (size_t)region->width * region->height;
+    }
+    const size_t merged_area = (size_t)(right - left) * (bottom - top);
+    const size_t minimum_dirty_area =
+        merged_area / FN_LCD_DIRTY_MERGE_AREA_RATIO
+        + (merged_area % FN_LCD_DIRTY_MERGE_AREA_RATIO != 0);
+    if (dirty_area < minimum_dirty_area) {
+        return;
+    }
+    context->dirty_regions[0] = (fn_lcd_region_t) {
+        .x = left,
+        .y = top,
+        .width = right - left,
+        .height = bottom - top,
+    };
+    context->dirty_region_count = 1;
+}
+
 /** 检测完整画布变化并记录合并后的脏矩形。 */
 esp_err_t fn_lcd_dma_scan_dirty(fn_lcd_dma_context_t *context,
     const uint8_t *frame, size_t frame_length, bool force,
@@ -306,6 +359,7 @@ esp_err_t fn_lcd_dma_scan_dirty(fn_lcd_dma_context_t *context,
             run_start = context->tile_columns;
         }
     }
+    fn_lcd_merge_fragmented_regions(context);
     context->pending_frame_valid = true;
     if (context->dirty_region_count == 0) {
         ++context->unchanged_frame_count;
@@ -340,6 +394,10 @@ esp_err_t fn_lcd_dma_write_region(fn_lcd_dma_context_t *context,
     *completed_transactions = 0;
     const size_t frame_stride = (size_t)context->config.width * 2U;
     const size_t region_stride = (size_t)region->width * 2U;
+    esp_err_t result = spi_device_acquire_bus(spi, portMAX_DELAY);
+    if (result != ESP_OK) {
+        return result;
+    }
     size_t row_offset = 0;
     while (row_offset < region->height) {
         size_t rows = region->height - row_offset;
@@ -356,14 +414,18 @@ esp_err_t fn_lcd_dma_write_region(fn_lcd_dma_context_t *context,
             memcpy(strip + row * region_stride, source, region_stride);
         }
         const size_t byte_count = rows * region_stride;
-        esp_err_t result = fn_lcd_dma_write_contiguous(
+        result = fn_lcd_dma_write_contiguous_locked(
             context, spi, strip, byte_count, completed_transactions);
         if (result != ESP_OK) {
-            return result;
+            break;
         }
         ++context->write_count;
         context->byte_count += byte_count;
         row_offset += rows;
+    }
+    spi_device_release_bus(spi);
+    if (result != ESP_OK) {
+        return result;
     }
     context->transaction_count += *completed_transactions;
     return ESP_OK;
