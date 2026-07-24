@@ -92,8 +92,10 @@ print(_usb_cdc_data.init())
 `queue_synchronized_frame(spi, frame, force=False)`。开启后，调用方只把最新完整
 画布复制到两块 PSRAM 帧槽中的待显示槽并立即返回；后续画布会覆盖旧待显示帧，
 但不会改写正在发送的活动帧。原生 FreeRTOS 任务在墙钟整秒前取走最新帧，按当前
-已显示哈希重新计算脏区，自行发送 LCD 窗口命令，并在整秒边界启动第一笔像素
-DMA。初始化字典中的 `sync_visible_frame_to_second` 仅作为初始默认值。
+已显示哈希重新计算脏区，并在面积增量可控时合并碎片脏区。任务先等待整秒边界，
+再占用 SPI、发送 LCD 窗口命令并立即启动第一笔像素 DMA，避免等待期间保持 CS
+有效而产生可见的分段扫描残影。初始化字典中的 `sync_visible_frame_to_second`
+仅作为初始默认值。
 `stats()` 中的 `async_queued_frame_count`、`async_replaced_frame_count`、
 `async_error_count`、`synchronized_frame_count`、`last_sync_target_us` 和
 `last_sync_error_us` 可用于核对邮箱覆盖、底层同步次数与首笔事务排队误差。

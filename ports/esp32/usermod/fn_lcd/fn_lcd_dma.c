@@ -261,11 +261,14 @@ static esp_err_t fn_lcd_dma_set_window_locked(
     return result;
 }
 
-/** 在原生任务中设置窗口并发送一个脏矩形。 */
+/** 等到目标时刻后再独占总线，连续设置窗口并发送一个脏矩形。 */
 static esp_err_t fn_lcd_dma_write_region_async(
     fn_lcd_dma_context_t *context, spi_device_handle_t spi,
     const uint8_t *frame, const fn_lcd_region_t *region,
     int64_t sync_target_us) {
+    if (sync_target_us > 0) {
+        fn_lcd_dma_wait_until(sync_target_us);
+    }
     esp_err_t result = spi_device_acquire_bus(spi, portMAX_DELAY);
     if (result != ESP_OK) {
         return result;
@@ -634,6 +637,48 @@ static bool fn_lcd_merge_vertical_region(fn_lcd_dma_context_t *context,
     return false;
 }
 
+/** 在传输面积可控时把碎片脏区合并，避免大字形出现分段扫描残影。 */
+static void fn_lcd_merge_fragmented_regions(fn_lcd_dma_context_t *context) {
+    if (context->dirty_region_count < 2) {
+        return;
+    }
+    uint16_t left = context->config.width;
+    uint16_t top = context->config.height;
+    uint16_t right = 0;
+    uint16_t bottom = 0;
+    size_t dirty_area = 0;
+    for (size_t index = 0; index < context->dirty_region_count; ++index) {
+        const fn_lcd_region_t *region = &context->dirty_regions[index];
+        if (region->x < left) {
+            left = region->x;
+        }
+        if (region->y < top) {
+            top = region->y;
+        }
+        if (region->x + region->width > right) {
+            right = region->x + region->width;
+        }
+        if (region->y + region->height > bottom) {
+            bottom = region->y + region->height;
+        }
+        dirty_area += (size_t)region->width * region->height;
+    }
+    const size_t merged_area = (size_t)(right - left) * (bottom - top);
+    const size_t minimum_dirty_area =
+        merged_area / FN_LCD_DIRTY_MERGE_AREA_RATIO
+        + (merged_area % FN_LCD_DIRTY_MERGE_AREA_RATIO != 0);
+    if (dirty_area < minimum_dirty_area) {
+        return;
+    }
+    context->dirty_regions[0] = (fn_lcd_region_t) {
+        .x = left,
+        .y = top,
+        .width = right - left,
+        .height = bottom - top,
+    };
+    context->dirty_region_count = 1;
+}
+
 /** 检测完整画布变化并记录合并后的脏矩形。 */
 esp_err_t fn_lcd_dma_scan_dirty(fn_lcd_dma_context_t *context,
     const uint8_t *frame, size_t frame_length, bool force,
@@ -686,6 +731,7 @@ esp_err_t fn_lcd_dma_scan_dirty(fn_lcd_dma_context_t *context,
             run_start = context->tile_columns;
         }
     }
+    fn_lcd_merge_fragmented_regions(context);
     context->pending_frame_valid = true;
     if (context->dirty_region_count == 0) {
         ++context->unchanged_frame_count;

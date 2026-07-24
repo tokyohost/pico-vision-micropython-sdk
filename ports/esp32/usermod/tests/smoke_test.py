@@ -102,6 +102,9 @@ def _test_lcd_dma():
     frame[0:2] = b"\x12\x34"
     assert fn_lcd.dirty_regions(frame) == [(0, 0, 2, 1)]
     fn_lcd.discard_frame()
+    frame[16:18] = b"\x56\x78"
+    assert fn_lcd.dirty_regions(frame) == [(0, 0, 2, 3)]
+    fn_lcd.discard_frame()
     fn_lcd.deinit()
     assert fn_lcd.stats()["chunk_size"] == 0
 
