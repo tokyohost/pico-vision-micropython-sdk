@@ -6,6 +6,7 @@
  */
 
 #include <stdbool.h>
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -23,7 +24,7 @@
 #include "font_builtin_data.h"
 #endif
 
-#define FN_CANVAS_API_VERSION (FN_CANVAS_BUILTIN_FONTS ? 8 : 7)
+#define FN_CANVAS_API_VERSION (9)
 
 #define FN_CANVAS_COMMAND_FILL_RECT (0)
 #define FN_CANVAS_COMMAND_LINE (1)
@@ -933,6 +934,182 @@ static mp_obj_t fn_canvas_draw_commands(size_t argument_count,
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
     fn_canvas_draw_commands_obj, 6, 6, fn_canvas_draw_commands);
 
+/** 将浮点比例限制到 0 到 1，供圆环覆盖率和颜色插值共同使用。 */
+static inline float fn_canvas_clamp_unit(float value) {
+    return value < 0.0f ? 0.0f : (value > 1.0f ? 1.0f : value);
+}
+
+/** 在 RGB565 空间线性混合两种颜色。 */
+static uint16_t fn_canvas_mix_rgb565(uint16_t start, uint16_t end,
+    float ratio) {
+    ratio = fn_canvas_clamp_unit(ratio);
+    const int start_red = (start >> 11) & 0x1f;
+    const int start_green = (start >> 5) & 0x3f;
+    const int start_blue = start & 0x1f;
+    const int end_red = (end >> 11) & 0x1f;
+    const int end_green = (end >> 5) & 0x3f;
+    const int end_blue = end & 0x1f;
+    const int red = (int)lroundf(start_red + (end_red - start_red) * ratio);
+    const int green = (int)lroundf(
+        start_green + (end_green - start_green) * ratio);
+    const int blue = (int)lroundf(
+        start_blue + (end_blue - start_blue) * ratio);
+    return (uint16_t)((red << 11) | (green << 5) | blue);
+}
+
+/** 根据圆周进度从三色调色板取连续渐变颜色。 */
+static uint16_t fn_canvas_gradient_rgb565(float progress,
+    uint16_t first, uint16_t middle, uint16_t last) {
+    progress = fn_canvas_clamp_unit(progress);
+    if (progress < 0.5f) {
+        return fn_canvas_mix_rgb565(first, middle, progress * 2.0f);
+    }
+    return fn_canvas_mix_rgb565(
+        middle, last, (progress - 0.5f) * 2.0f);
+}
+
+/** 使用原生浮点运算绘制抗锯齿渐变圆环及圆角弧段端帽。 */
+static mp_obj_t fn_canvas_draw_gradient_ring(size_t argument_count,
+    const mp_obj_t *arguments) {
+    int width;
+    int height;
+    int origin_x;
+    int origin_y;
+    uint8_t *buffer = fn_canvas_parse_canvas(
+        arguments, &width, &height, &origin_x, &origin_y);
+    const int center_x = mp_obj_get_int(arguments[5]) - origin_x;
+    const int center_y = mp_obj_get_int(arguments[6]) - origin_y;
+    const int inner_radius_value = mp_obj_get_int(arguments[7]);
+    const int radius = mp_obj_get_int(arguments[8]);
+    const int thickness = radius - inner_radius_value;
+    const float remaining = fn_canvas_clamp_unit(
+        (float)mp_obj_get_float(arguments[9]) / 100.0f);
+    const float start_angle = (float)mp_obj_get_float(arguments[10])
+        * 0.01745329251994329577f;
+    const uint16_t background = (uint16_t)mp_obj_get_int(arguments[11]);
+    const uint16_t first = (uint16_t)mp_obj_get_int(arguments[12]);
+    const uint16_t middle = (uint16_t)mp_obj_get_int(arguments[13]);
+    const uint16_t last = (uint16_t)mp_obj_get_int(arguments[14]);
+    const bool round_cap = mp_obj_is_true(arguments[15]);
+    if (radius <= 0 || thickness <= 0 || thickness >= radius) {
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid gradient ring size"));
+    }
+
+    const float inner_radius = (float)inner_radius_value;
+    const float middle_radius = ((float)radius + inner_radius) * 0.5f;
+    const float cap_radius = (float)thickness * 0.5f;
+    const float full_angle = 6.28318530717958647692f;
+    const float end_angle = start_angle + full_angle * remaining;
+    const float start_x = (float)center_x + cosf(start_angle) * middle_radius;
+    const float start_y = (float)center_y + sinf(start_angle) * middle_radius;
+    const float end_x = (float)center_x + cosf(end_angle) * middle_radius;
+    const float end_y = (float)center_y + sinf(end_angle) * middle_radius;
+    const float minimum_distance = inner_radius - 0.5f;
+    const float maximum_distance = (float)radius + 0.5f;
+    const float minimum_distance_square = minimum_distance * minimum_distance;
+    const float maximum_distance_square = maximum_distance * maximum_distance;
+    const float cap_limit = cap_radius + 0.5f;
+    const float cap_limit_square = cap_limit * cap_limit;
+    const int left = center_x - radius - 1 < 0
+        ? 0 : center_x - radius - 1;
+    const int right = center_x + radius + 1 >= width
+        ? width - 1 : center_x + radius + 1;
+    const int top = center_y - radius - 1 < 0
+        ? 0 : center_y - radius - 1;
+    const int bottom = center_y + radius + 1 >= height
+        ? height - 1 : center_y + radius + 1;
+
+    for (int point_y = top; point_y <= bottom; ++point_y) {
+        const float delta_y = (float)(point_y - center_y);
+        for (int point_x = left; point_x <= right; ++point_x) {
+            const float delta_x = (float)(point_x - center_x);
+            const float distance_square =
+                delta_x * delta_x + delta_y * delta_y;
+            /*
+             * 大多数包围盒像素不在圆环内。先比较平方距离可避免这些像素
+             * 执行 sqrtf、atan2f 和颜色插值，同时与原覆盖边界完全一致。
+             */
+            if (distance_square < minimum_distance_square
+                || distance_square > maximum_distance_square) {
+                continue;
+            }
+            const float distance = sqrtf(distance_square);
+            const float outer = fn_canvas_clamp_unit(
+                (float)radius + 0.5f - distance);
+            const float inner = fn_canvas_clamp_unit(
+                distance - inner_radius + 0.5f);
+            const float coverage = outer * inner;
+            if (coverage <= 0.0f) {
+                continue;
+            }
+            if (remaining <= 0.0f) {
+                const uint16_t color = coverage >= 1.0f
+                    ? background
+                    : fn_canvas_mix_rgb565(0, background, coverage);
+                fn_canvas_pixel_local(
+                    buffer, width, height, point_x, point_y, color);
+                continue;
+            }
+            float angle = atan2f(delta_y, delta_x) - start_angle;
+            if (angle < 0.0f) {
+                angle += full_angle;
+            }
+            const float progress = angle / full_angle;
+            const bool sector = remaining >= 1.0f
+                || (remaining > 0.0f && progress <= remaining);
+            float active = sector ? 1.0f : 0.0f;
+            float start_distance_square = 99999999.0f;
+            float end_distance_square = 99999999.0f;
+            if (round_cap && !sector
+                && remaining > 0.0f && remaining < 1.0f) {
+                const float start_dx = (float)point_x - start_x;
+                const float start_dy = (float)point_y - start_y;
+                const float end_dx = (float)point_x - end_x;
+                const float end_dy = (float)point_y - end_y;
+                start_distance_square =
+                    start_dx * start_dx + start_dy * start_dy;
+                end_distance_square =
+                    end_dx * end_dx + end_dy * end_dy;
+                const float cap_distance_square =
+                    start_distance_square < end_distance_square
+                    ? start_distance_square : end_distance_square;
+                /*
+                 * 端帽之外的像素覆盖率必为零。仅在端帽范围内执行一次
+                 * sqrtf，替代旧实现对起止端分别开平方。
+                 */
+                if (cap_distance_square < cap_limit_square) {
+                    const float cap_coverage = fn_canvas_clamp_unit(
+                        cap_limit - sqrtf(cap_distance_square));
+                    active = active > cap_coverage ? active : cap_coverage;
+                }
+            }
+            uint16_t color = coverage >= 1.0f
+                ? background
+                : fn_canvas_mix_rgb565(0, background, coverage);
+            if (active > 0.0f) {
+                const float gradient_at = sector
+                    ? (progress < remaining ? progress : remaining)
+                    : (start_distance_square <= end_distance_square
+                        ? 0.0f : remaining);
+                const uint16_t gradient = fn_canvas_gradient_rgb565(
+                    gradient_at, first, middle, last);
+                const uint16_t foreground = active >= 1.0f
+                    ? gradient
+                    : fn_canvas_mix_rgb565(background, gradient, active);
+                color = coverage >= 1.0f
+                    ? foreground
+                    : fn_canvas_mix_rgb565(0, foreground, coverage);
+            }
+            fn_canvas_pixel_local(
+                buffer, width, height, point_x, point_y, color);
+        }
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+    fn_canvas_draw_gradient_ring_obj, 16, 16,
+    fn_canvas_draw_gradient_ring);
+
 static const mp_rom_map_elem_t fn_canvas_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_fn_canvas)},
     {MP_ROM_QSTR(MP_QSTR_API_VERSION), MP_ROM_INT(FN_CANVAS_API_VERSION)},
@@ -953,6 +1130,8 @@ static const mp_rom_map_elem_t fn_canvas_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_font_glyph), MP_ROM_PTR(&fn_canvas_font_glyph_obj)},
 #endif
     {MP_ROM_QSTR(MP_QSTR_draw_commands), MP_ROM_PTR(&fn_canvas_draw_commands_obj)},
+    {MP_ROM_QSTR(MP_QSTR_draw_gradient_ring),
+        MP_ROM_PTR(&fn_canvas_draw_gradient_ring_obj)},
 };
 static MP_DEFINE_CONST_DICT(fn_canvas_module_globals, fn_canvas_module_globals_table);
 
