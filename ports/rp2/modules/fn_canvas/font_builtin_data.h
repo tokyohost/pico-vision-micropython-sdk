@@ -19,5 +19,7 @@ extern const uint32_t fn_builtin_font_glyph_count;
 extern const uint8_t fn_builtin_font_codepoints[];
 extern const uint8_t fn_builtin_font_wqy_bitmap[];
 extern const uint8_t fn_builtin_font_fusion_bitmap[];
+/* Z 工坊使用独立十二行字形，每字二十四字节，复用上述字符索引。 */
+extern const uint8_t fn_builtin_font_zlabs_bitmap[];
 
 #endif

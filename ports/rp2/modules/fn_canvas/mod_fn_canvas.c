@@ -24,7 +24,7 @@
 #include "font_builtin_data.h"
 #endif
 
-#define FN_CANVAS_API_VERSION (9)
+#define FN_CANVAS_API_VERSION (10)
 
 #define FN_CANVAS_COMMAND_FILL_RECT (0)
 #define FN_CANVAS_COMMAND_LINE (1)
@@ -32,12 +32,14 @@
 
 #define FN_CANVAS_FONT_WQY_8X16 (3)
 #define FN_CANVAS_FONT_FUSION_PIXEL_8X16 (4)
+#define FN_CANVAS_FONT_ZLABS_PIXEL_12PX (5)
 
 #if FN_CANVAS_BUILTIN_FONTS
 /** 判断字体编号是否对应编译进固件的双语点阵字体。 */
 static bool fn_canvas_is_builtin_font(int font_kind) {
     return font_kind == FN_CANVAS_FONT_WQY_8X16
-        || font_kind == FN_CANVAS_FONT_FUSION_PIXEL_8X16;
+        || font_kind == FN_CANVAS_FONT_FUSION_PIXEL_8X16
+        || font_kind == FN_CANVAS_FONT_ZLABS_PIXEL_12PX;
 }
 
 /** 从小端双字节字符索引读取一个 Unicode 基本平面码点。 */
@@ -72,13 +74,24 @@ static uint32_t fn_canvas_find_builtin_glyph(unichar codepoint) {
 static const uint8_t *fn_canvas_builtin_glyph(int font_kind,
     unichar codepoint) {
     const uint32_t index = fn_canvas_find_builtin_glyph(codepoint);
+    if (font_kind == FN_CANVAS_FONT_ZLABS_PIXEL_12PX) {
+        return fn_builtin_font_zlabs_bitmap + index * 24U;
+    }
     const uint8_t *font = font_kind == FN_CANVAS_FONT_WQY_8X16
         ? fn_builtin_font_wqy_bitmap : fn_builtin_font_fusion_bitmap;
     return font + index * FN_BUILTIN_FONT_GLYPH_BYTES;
 }
 
+/** 返回内置字体的实际像素高度。 */
+static int fn_canvas_builtin_height(int font_kind) {
+    return font_kind == FN_CANVAS_FONT_ZLABS_PIXEL_12PX ? 12 : FN_BUILTIN_FONT_HEIGHT;
+}
+
 /** 返回半角 ASCII 或全角中文字符的固定水平步进。 */
-static int fn_canvas_builtin_advance(unichar codepoint) {
+static int fn_canvas_builtin_advance(int font_kind, unichar codepoint) {
+    if (font_kind == FN_CANVAS_FONT_ZLABS_PIXEL_12PX) {
+        return codepoint < 0x80 ? 6 : 12;
+    }
     return codepoint < 0x80 ? FN_BUILTIN_FONT_ASCII_ADVANCE
         : FN_BUILTIN_FONT_FULL_WIDTH_ADVANCE;
 }
@@ -148,13 +161,13 @@ static void fn_canvas_fill_local(uint8_t *buffer, int canvas_width,
 }
 
 #if FN_CANVAS_BUILTIN_FONTS
-/** 在当前裁剪视口内绘制一个固件内置十六像素字形。 */
+/** 在当前裁剪视口内绘制一个固件内置十二或十六像素字形。 */
 static void fn_canvas_draw_builtin_glyph(uint8_t *buffer, int canvas_width,
     int canvas_height, int origin_x, int origin_y, int font_kind,
     unichar codepoint, int x, int y, uint16_t color, int scale) {
     const uint8_t *glyph = fn_canvas_builtin_glyph(font_kind, codepoint);
-    const int glyph_width = fn_canvas_builtin_advance(codepoint);
-    for (int row = 0; row < FN_BUILTIN_FONT_HEIGHT; ++row) {
+    const int glyph_width = fn_canvas_builtin_advance(font_kind, codepoint);
+    for (int row = 0; row < fn_canvas_builtin_height(font_kind); ++row) {
         const uint16_t row_bits = ((uint16_t)glyph[row * 2] << 8)
             | glyph[row * 2 + 1];
         for (int column = 0; column < glyph_width; ++column) {
@@ -770,7 +783,7 @@ static mp_obj_t fn_canvas_draw_text(size_t argument_count,
             fn_canvas_draw_builtin_glyph(buffer, width, height,
                 origin_x, origin_y, font_kind, codepoint,
                 cursor_x, text_y, color, scale);
-            cursor_x += fn_canvas_builtin_advance(codepoint) * scale;
+            cursor_x += fn_canvas_builtin_advance(font_kind, codepoint) * scale;
             cursor = utf8_next_char(cursor);
         }
         return mp_const_none;
@@ -843,7 +856,7 @@ static mp_obj_t fn_canvas_text_width(mp_obj_t font_kind_object,
     const byte *end = cursor + text_length;
     mp_int_t width = 0;
     while (cursor < end) {
-        width += fn_canvas_builtin_advance(utf8_get_char(cursor)) * scale;
+        width += fn_canvas_builtin_advance(font_kind, utf8_get_char(cursor)) * scale;
         cursor = utf8_next_char(cursor);
     }
     return mp_obj_new_int(width);
@@ -867,11 +880,11 @@ static mp_obj_t fn_canvas_font_glyph(mp_obj_t font_kind_object,
     }
     const unichar codepoint = utf8_get_char(character);
     const uint8_t *glyph = fn_canvas_builtin_glyph(font_kind, codepoint);
-    const size_t glyph_width = (size_t)fn_canvas_builtin_advance(codepoint);
+    const size_t glyph_width = (size_t)fn_canvas_builtin_advance(font_kind, codepoint);
     mp_obj_tuple_t *columns = MP_OBJ_TO_PTR(mp_obj_new_tuple(glyph_width, NULL));
     for (size_t column = 0; column < glyph_width; ++column) {
         uint16_t bits = 0;
-        for (int row = 0; row < FN_BUILTIN_FONT_HEIGHT; ++row) {
+        for (int row = 0; row < fn_canvas_builtin_height(font_kind); ++row) {
             const uint16_t row_bits = ((uint16_t)glyph[row * 2] << 8)
                 | glyph[row * 2 + 1];
             if ((row_bits & (0x8000U >> column)) != 0) {

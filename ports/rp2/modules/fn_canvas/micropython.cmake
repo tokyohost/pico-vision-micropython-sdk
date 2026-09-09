@@ -5,6 +5,7 @@ if(FN_CANVAS_BUILTIN_FONTS)
     # 字体数组不包含 QSTR，单独编译可避免 MicroPython 扫描三兆字节生成源码。
     add_library(fn_canvas_font_data STATIC
         ${CMAKE_CURRENT_LIST_DIR}/font_builtin_data.c
+        ${CMAKE_CURRENT_LIST_DIR}/font_zlabs_pixel_data.c
     )
     # QSTR 预处理阶段不会继承接口库定义，需显式启用内置字体相关方法名扫描。
     list(APPEND MICROPY_CPP_DEF_EXTRA
