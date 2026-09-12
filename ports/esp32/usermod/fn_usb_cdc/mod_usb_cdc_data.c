@@ -27,6 +27,7 @@ extern void mp_usbd_task_lock_enable(void);
 #define USB_CDC_FRAME_WORK_SIZE (USB_CDC_MAX_FRAME_SIZE + 1)
 #define USB_CDC_TASK_STACK_SIZE (4096)
 #define USB_CDC_TASK_PRIORITY (ESP_TASK_PRIO_MIN + 2)
+#define USB_CDC_TASK_DELAY_TICKS ((TickType_t)1)
 #define USB_CDC_PARTIAL_FRAME_TIMEOUT_MS (1000)
 
 static const uint8_t usb_cdc_frame_magic[] = {'P', 'V', '1', ':'};
@@ -226,7 +227,8 @@ static void usb_cdc_rx_task(void *argument) {
             }
             xSemaphoreGive(usb_cdc_state_mutex);
         }
-        vTaskDelay(pdMS_TO_TICKS(1));
+        // ESP-IDF 默认 tick 可能是 100 Hz，pdMS_TO_TICKS(1) 会变成 0 并让高优先级任务饿死 MicroPython。
+        vTaskDelay(USB_CDC_TASK_DELAY_TICKS);
     }
 }
 
