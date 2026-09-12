@@ -56,6 +56,29 @@ static ringbuf_t cdc_data_rx_ringbuf;
 static bool mp_usbd_cdc_data_rx_ready(void) {
     return cdc_data_rx_ringbuf.buf != NULL && cdc_data_rx_ringbuf.size > 1;
 }
+
+// 清理一次数据 CDC 会话，避免上一次主机关闭时留下的软件缓冲、发送 FIFO
+// 或端点 STALL 状态阻塞下一次打开。数据 CDC 与控制台 CDC 使用不同端点，
+// 只清理 USBD_CDC_EP_IN 无法恢复接口一的 OUT 端点。
+static void mp_usbd_cdc_data_reset_session(void) {
+    if (mp_usbd_cdc_data_rx_ready()) {
+        ringbuf_reset(&cdc_data_rx_ringbuf);
+    }
+    cdc_itf_pending &= ~(1 << MP_USBD_CDC_DATA_ITF);
+    if (!tusb_inited()) {
+        return;
+    }
+    tud_cdc_n_write_clear(MP_USBD_CDC_DATA_ITF);
+    if (usbd_edpt_stalled(TUD_OPT_RHPORT, USBD_CDC_DATA_EP_CMD)) {
+        usbd_edpt_clear_stall(TUD_OPT_RHPORT, USBD_CDC_DATA_EP_CMD);
+    }
+    if (usbd_edpt_stalled(TUD_OPT_RHPORT, USBD_CDC_DATA_EP_OUT)) {
+        usbd_edpt_clear_stall(TUD_OPT_RHPORT, USBD_CDC_DATA_EP_OUT);
+    }
+    if (usbd_edpt_stalled(TUD_OPT_RHPORT, USBD_CDC_DATA_EP_IN)) {
+        usbd_edpt_clear_stall(TUD_OPT_RHPORT, USBD_CDC_DATA_EP_IN);
+    }
+}
 #endif
 
 uintptr_t mp_usbd_cdc_poll_interfaces(uintptr_t poll_flags) {
@@ -302,8 +325,13 @@ void MICROPY_WRAP_TUD_CDC_LINE_STATE_CB(tud_cdc_line_state_cb)(uint8_t itf, bool
     #if MICROPY_HW_USB_CDC && !MICROPY_EXCLUDE_SHARED_TINYUSB_USBD_CDC
     #if MICROPY_HW_USB_CDC_DATA
     if (itf == MP_USBD_CDC_DATA_ITF && !dtr) {
-        ringbuf_reset(&cdc_data_rx_ringbuf);
-        cdc_itf_pending &= ~(1 << itf);
+        // 主机关闭端口时同时释放数据 CDC 的 OUT/IN 端点状态，
+        // 使下一轮“不拔插重连”具备与 USB 重新枚举相同的会话边界。
+        mp_usbd_cdc_data_reset_session();
+    } else if (itf == MP_USBD_CDC_DATA_ITF && dtr) {
+        // 某些 Windows 端口重开只重新置 DTR，不一定先产生完整的总线复位。
+        // 在新会话开始前再清一次，防止旧端点状态或残留字节污染新事务。
+        mp_usbd_cdc_data_reset_session();
     }
     #endif
     if (dtr) {
