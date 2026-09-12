@@ -30,7 +30,7 @@
 
 #include "mp_usbd.h"
 
-#if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+#if MICROPY_HW_USB_CDC_DATA
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -70,14 +70,14 @@ void mp_usbd_task_suspend(void) {
 #if !MICROPY_HW_ENABLE_USB_RUNTIME_DEVICE
 
 void mp_usbd_task(void) {
-    #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+    #if MICROPY_HW_USB_CDC_DATA
     mp_usbd_task_lock();
-    #endif
     if (!usbd_task_suspended) {
         tud_task_ext(0, false);
     }
-    #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
     mp_usbd_task_unlock();
+    #else
+    tud_task_ext(0, false);
     #endif
 }
 

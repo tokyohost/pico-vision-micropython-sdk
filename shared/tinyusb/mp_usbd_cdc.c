@@ -32,7 +32,7 @@
 #include "mp_usbd.h"
 #include "mp_usbd_cdc.h"
 
-#if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+#if MICROPY_HW_USB_CDC_DATA
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #endif
@@ -56,14 +56,9 @@ static int8_t cdc_connected_flush_delay = 0;
 #error "The data CDC RX buffer size must be between 64 and 65534 bytes"
 #endif
 static ringbuf_t cdc_data_rx_ringbuf;
-#if defined(ESP_PLATFORM)
 static portMUX_TYPE cdc_data_rx_lock = portMUX_INITIALIZER_UNLOCKED;
 #define CDC_DATA_RX_LOCK() portENTER_CRITICAL(&cdc_data_rx_lock)
 #define CDC_DATA_RX_UNLOCK() portEXIT_CRITICAL(&cdc_data_rx_lock)
-#else
-#define CDC_DATA_RX_LOCK() mp_uint_t atomic_state = MICROPY_BEGIN_ATOMIC_SECTION()
-#define CDC_DATA_RX_UNLOCK() MICROPY_END_ATOMIC_SECTION(atomic_state)
-#endif
 
 // 返回数据 CDC 的运行时接收缓冲区是否已经就绪。
 static bool mp_usbd_cdc_data_rx_ready(void) {
@@ -75,13 +70,9 @@ static void mp_usbd_cdc_data_service_pending(void) {
     if (!(cdc_itf_pending & (1 << MP_USBD_CDC_DATA_ITF))) {
         return;
     }
-    #if defined(ESP_PLATFORM)
     mp_usbd_task_lock();
-    #endif
     tud_cdc_rx_cb(MP_USBD_CDC_DATA_ITF);
-    #if defined(ESP_PLATFORM)
     mp_usbd_task_unlock();
-    #endif
 }
 
 // 清理一次数据 CDC 会话，避免上一次主机关闭时留下的软件缓冲、发送 FIFO
@@ -117,7 +108,7 @@ uintptr_t mp_usbd_cdc_poll_interfaces(uintptr_t poll_flags) {
         // an interrupt handler) while there is data pending.
         mp_usbd_task();
     }
-    #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+    #if MICROPY_HW_USB_CDC_DATA
     mp_usbd_task_lock();
     #endif
 
@@ -141,7 +132,7 @@ uintptr_t mp_usbd_cdc_poll_interfaces(uintptr_t poll_flags) {
         // When connected operate as blocking, only allow if space is available.
         ret |= MP_STREAM_POLL_WR;
     }
-    #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+    #if MICROPY_HW_USB_CDC_DATA
     mp_usbd_task_unlock();
     #endif
     return ret;
@@ -256,9 +247,7 @@ size_t mp_usbd_cdc_data_tx_write(const uint8_t *buffer, size_t length) {
     size_t offset = 0;
     mp_uint_t last_write = mp_hal_ticks_ms();
     while (offset < length) {
-        #if defined(ESP_PLATFORM)
         mp_usbd_task_lock();
-        #endif
         uint32_t available = tud_cdc_n_write_available(MP_USBD_CDC_DATA_ITF);
         uint32_t count = MIN(length - offset, available);
         uint32_t written = tud_cdc_n_write(
@@ -267,9 +256,7 @@ size_t mp_usbd_cdc_data_tx_write(const uint8_t *buffer, size_t length) {
             count
         );
         tud_cdc_n_write_flush(MP_USBD_CDC_DATA_ITF);
-        #if defined(ESP_PLATFORM)
         mp_usbd_task_unlock();
-        #endif
         offset += written;
         if (offset >= length) {
             break;
@@ -287,24 +274,16 @@ size_t mp_usbd_cdc_data_tx_write(const uint8_t *buffer, size_t length) {
 
 bool mp_usbd_cdc_data_connected(void) {
     mp_usbd_task();
-    #if defined(ESP_PLATFORM)
     mp_usbd_task_lock();
-    #endif
     bool connected = tud_cdc_n_connected(MP_USBD_CDC_DATA_ITF);
-    #if defined(ESP_PLATFORM)
     mp_usbd_task_unlock();
-    #endif
     return connected;
 }
 
 void mp_usbd_cdc_data_tx_flush(void) {
-    #if defined(ESP_PLATFORM)
     mp_usbd_task_lock();
-    #endif
     tud_cdc_n_write_flush(MP_USBD_CDC_DATA_ITF);
-    #if defined(ESP_PLATFORM)
     mp_usbd_task_unlock();
-    #endif
     mp_usbd_task();
 }
 #endif
@@ -317,7 +296,7 @@ mp_uint_t mp_usbd_cdc_tx_strn(const char *str, mp_uint_t len) {
     size_t i = 0;
     while (i < len) {
         uint32_t n = len - i;
-        #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+        #if MICROPY_HW_USB_CDC_DATA
         mp_usbd_task_lock();
         #endif
 
@@ -333,7 +312,7 @@ mp_uint_t mp_usbd_cdc_tx_strn(const char *str, mp_uint_t len) {
 
         uint32_t n2 = tud_cdc_write(str + i, n);
         tud_cdc_write_flush();
-        #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+        #if MICROPY_HW_USB_CDC_DATA
         mp_usbd_task_unlock();
         #endif
         i += n2;

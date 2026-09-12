@@ -77,7 +77,6 @@ static inline void mp_usbd_init_tud(void) {
 // Run the TinyUSB device task
 void mp_usbd_task(void);
 
-#if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
 // 在启动独立 CDC 任务前启用 TinyUSB 任务串行化保护。
 void mp_usbd_task_lock_enable(void);
 // 获取和释放 TinyUSB 串行化锁，仅供需要补处理 CDC 回调的 C 层使用。
@@ -85,7 +84,6 @@ void mp_usbd_task_lock(void);
 void mp_usbd_task_unlock(void);
 // 在切换 USB PHY 前永久停止后续 TinyUSB 任务调度。
 void mp_usbd_task_suspend(void);
-#endif
 
 // Schedule a call to mp_usbd_task(), even if no USB interrupt has occurred
 void mp_usbd_schedule_task(void);

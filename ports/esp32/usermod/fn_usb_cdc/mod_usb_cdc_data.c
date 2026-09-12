@@ -16,6 +16,9 @@
 #include "shared/tinyusb/mp_usbd.h"
 #include "shared/tinyusb/mp_usbd_cdc.h"
 
+// usermod 可能在 TinyUSB 头文件首次展开后才注入板级 CDC 宏，因此在入口显式声明跨编译单元 API。
+extern void mp_usbd_task_lock_enable(void);
+
 #if MICROPY_HW_USB_CDC_DATA
 
 #define USB_CDC_FRAME_QUEUE_DEPTH (4)
