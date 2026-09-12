@@ -15,6 +15,17 @@
 // 数据 CDC 在 C 层使用独立环形缓冲，业务线程短时阻塞不会停止 USB OUT 接收。
 #define MICROPY_HW_USB_CDC_DATA_RX_BUFSIZE  (32768)
 #define MICROPY_HW_USB_CDC_DATA_TX_TIMEOUT  (1000)
+// GC 扫描 PSRAM 堆时定期推进 TinyUSB，把 OUT 端点数据搬入独立 C 环形缓冲。
+// 该钩子只运行无 Python 分配的 USB C 任务，避免全堆回收期间出现帧缺字节。
+void mp_usbd_gc_collect_hook(void);
+#define MICROPY_GC_HOOK_LOOP(loop_index) \
+    do { \
+        static unsigned int gc_usb_hook_counter; \
+        (void)(loop_index); \
+        if (((++gc_usb_hook_counter) & 0x3ff) == 0) { \
+            mp_usbd_gc_collect_hook(); \
+        } \
+    } while (0)
 // 固定使用编译期双 CDC 描述符，禁止 Python 运行期重配整个 USB 设备。
 #define MICROPY_HW_ENABLE_USB_RUNTIME_DEVICE (0)
 

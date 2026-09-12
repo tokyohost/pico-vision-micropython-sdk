@@ -3,6 +3,7 @@
 import fn_canvas
 import fn_lcd
 import fn_protocol
+import _usb_cdc_data
 
 
 def _crc16_ccitt_false(data):
@@ -60,6 +61,15 @@ def _test_protocol():
         raise AssertionError("损坏的 PV1 载荷未触发 CRC 异常")
 
 
+def _test_usb_cdc():
+    """验证独立 CDC 接收任务和 C 层完整帧队列接口。"""
+    assert _usb_cdc_data.api_version() == 2
+    assert _usb_cdc_data.init() == 32768
+    assert isinstance(_usb_cdc_data.frames_available(), int)
+    assert callable(_usb_cdc_data.read_frame)
+    assert callable(_usb_cdc_data.read_error)
+
+
 def _test_lcd_dma():
     """验证 LCD 原生模块可初始化完整方案并自动比较完整画布。"""
     configuration = {
@@ -105,7 +115,8 @@ def main():
     _test_canvas()
     _test_lcd_dma()
     _test_protocol()
-    print("fn_canvas、fn_lcd 与 fn_protocol ESP32-S3 冒烟测试通过")
+    _test_usb_cdc()
+    print("fn_canvas、fn_lcd、fn_protocol 与独立 CDC 任务 ESP32-S3 冒烟测试通过")
 
 
 main()

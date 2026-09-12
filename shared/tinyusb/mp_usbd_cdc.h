@@ -50,6 +50,8 @@ void mp_usbd_cdc_data_rx_configure(uint8_t *buffer, size_t length);
 size_t mp_usbd_cdc_data_rx_any(void);
 // 从固件内置数据 CDC 的 C 环形缓冲区读取数据。
 size_t mp_usbd_cdc_data_rx_read(uint8_t *buffer, size_t length);
+// 仅从 C 环形缓冲区取数，由独立接收任务调用，不再入 TinyUSB 任务。
+size_t mp_usbd_cdc_data_rx_read_buffered(uint8_t *buffer, size_t length);
 // 通过固件内置数据 CDC 发送数据，并在超时前持续推进 TinyUSB。
 size_t mp_usbd_cdc_data_tx_write(const uint8_t *buffer, size_t length);
 // 返回主机是否已经打开固件内置数据 CDC。

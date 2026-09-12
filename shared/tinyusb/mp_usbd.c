@@ -30,11 +30,66 @@
 
 #include "mp_usbd.h"
 
+#if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+static StaticSemaphore_t usbd_task_mutex_storage;
+static SemaphoreHandle_t usbd_task_mutex;
+static volatile bool usbd_task_suspended;
+
+// 创建静态互斥量，使 MicroPython 调度器与独立 CDC 任务不会并发进入 TinyUSB。
+void mp_usbd_task_lock_enable(void) {
+    if (usbd_task_mutex == NULL) {
+        usbd_task_mutex = xSemaphoreCreateMutexStatic(&usbd_task_mutex_storage);
+    }
+}
+
+// 获取 TinyUSB 状态机互斥量；后台任务启动前未创建时保持兼容。
+void mp_usbd_task_lock(void) {
+    if (usbd_task_mutex != NULL) {
+        xSemaphoreTake(usbd_task_mutex, portMAX_DELAY);
+    }
+}
+
+// 释放 TinyUSB 状态机互斥量。
+void mp_usbd_task_unlock(void) {
+    if (usbd_task_mutex != NULL) {
+        xSemaphoreGive(usbd_task_mutex);
+    }
+}
+
+// 阻止后台任务在 USB PHY 交给 ROM 下载器后继续访问 TinyUSB。
+void mp_usbd_task_suspend(void) {
+    mp_usbd_task_lock();
+    usbd_task_suspended = true;
+    mp_usbd_task_unlock();
+}
+#endif
+
 #if !MICROPY_HW_ENABLE_USB_RUNTIME_DEVICE
 
 void mp_usbd_task(void) {
-    tud_task_ext(0, false);
+    #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+    mp_usbd_task_lock();
+    #endif
+    if (!usbd_task_suspended) {
+        tud_task_ext(0, false);
+    }
+    #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+    mp_usbd_task_unlock();
+    #endif
 }
+
+#if MICROPY_HW_USB_CDC_DATA
+// 在 GC 长扫描期间只推进 TinyUSB C 状态机，确保数据 CDC OUT 端点持续排空。
+// 接收回调把数据写入非 GC 管理的环形缓冲，不创建或访问 Python 对象。
+void mp_usbd_gc_collect_hook(void) {
+    if (tusb_inited()) {
+        mp_usbd_task();
+    }
+}
+#endif
 
 void mp_usbd_task_callback(mp_sched_node_t *node) {
     (void)node;

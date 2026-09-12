@@ -32,6 +32,11 @@
 #include "mp_usbd.h"
 #include "mp_usbd_cdc.h"
 
+#if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
+#endif
+
 #if MICROPY_HW_USB_CDC && MICROPY_HW_ENABLE_USBDEV && !MICROPY_EXCLUDE_SHARED_TINYUSB_USBD_CDC
 
 // TinyUSB has no public API for endpoint stall detection/clearing; this
@@ -51,10 +56,32 @@ static int8_t cdc_connected_flush_delay = 0;
 #error "The data CDC RX buffer size must be between 64 and 65534 bytes"
 #endif
 static ringbuf_t cdc_data_rx_ringbuf;
+#if defined(ESP_PLATFORM)
+static portMUX_TYPE cdc_data_rx_lock = portMUX_INITIALIZER_UNLOCKED;
+#define CDC_DATA_RX_LOCK() portENTER_CRITICAL(&cdc_data_rx_lock)
+#define CDC_DATA_RX_UNLOCK() portEXIT_CRITICAL(&cdc_data_rx_lock)
+#else
+#define CDC_DATA_RX_LOCK() mp_uint_t atomic_state = MICROPY_BEGIN_ATOMIC_SECTION()
+#define CDC_DATA_RX_UNLOCK() MICROPY_END_ATOMIC_SECTION(atomic_state)
+#endif
 
 // 返回数据 CDC 的运行时接收缓冲区是否已经就绪。
 static bool mp_usbd_cdc_data_rx_ready(void) {
     return cdc_data_rx_ringbuf.buf != NULL && cdc_data_rx_ringbuf.size > 1;
+}
+
+// 在 TinyUSB 串行化锁内重试因环形缓冲满而暂停的数据 CDC 回调。
+static void mp_usbd_cdc_data_service_pending(void) {
+    if (!(cdc_itf_pending & (1 << MP_USBD_CDC_DATA_ITF))) {
+        return;
+    }
+    #if defined(ESP_PLATFORM)
+    mp_usbd_task_lock();
+    #endif
+    tud_cdc_rx_cb(MP_USBD_CDC_DATA_ITF);
+    #if defined(ESP_PLATFORM)
+    mp_usbd_task_unlock();
+    #endif
 }
 
 // 清理一次数据 CDC 会话，避免上一次主机关闭时留下的软件缓冲、发送 FIFO
@@ -62,7 +89,9 @@ static bool mp_usbd_cdc_data_rx_ready(void) {
 // 只清理 USBD_CDC_EP_IN 无法恢复接口一的 OUT 端点。
 static void mp_usbd_cdc_data_reset_session(void) {
     if (mp_usbd_cdc_data_rx_ready()) {
+        CDC_DATA_RX_LOCK();
         ringbuf_reset(&cdc_data_rx_ringbuf);
+        CDC_DATA_RX_UNLOCK();
     }
     cdc_itf_pending &= ~(1 << MP_USBD_CDC_DATA_ITF);
     if (!tusb_inited()) {
@@ -88,6 +117,9 @@ uintptr_t mp_usbd_cdc_poll_interfaces(uintptr_t poll_flags) {
         // an interrupt handler) while there is data pending.
         mp_usbd_task();
     }
+    #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+    mp_usbd_task_lock();
+    #endif
 
     // any CDC interfaces left to poll?
     if (cdc_itf_pending) {
@@ -109,6 +141,9 @@ uintptr_t mp_usbd_cdc_poll_interfaces(uintptr_t poll_flags) {
         // When connected operate as blocking, only allow if space is available.
         ret |= MP_STREAM_POLL_WR;
     }
+    #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+    mp_usbd_task_unlock();
+    #endif
     return ret;
 }
 
@@ -125,7 +160,9 @@ void MICROPY_WRAP_TUD_CDC_RX_CB(tud_cdc_rx_cb)(uint8_t itf) {
         }
         uint8_t chunk[64];
         while (tud_cdc_n_available(itf) > 0) {
+            CDC_DATA_RX_LOCK();
             size_t free = ringbuf_free(&cdc_data_rx_ringbuf);
+            CDC_DATA_RX_UNLOCK();
             if (!free) {
                 cdc_itf_pending |= (1 << itf);
                 return;
@@ -136,7 +173,9 @@ void MICROPY_WRAP_TUD_CDC_RX_CB(tud_cdc_rx_cb)(uint8_t itf) {
             if (!count) {
                 return;
             }
+            CDC_DATA_RX_LOCK();
             ringbuf_memcpy_put_internal(&cdc_data_rx_ringbuf, chunk, count);
+            CDC_DATA_RX_UNLOCK();
         }
         return;
     }
@@ -168,12 +207,12 @@ void MICROPY_WRAP_TUD_CDC_RX_CB(tud_cdc_rx_cb)(uint8_t itf) {
 
 #if MICROPY_HW_USB_CDC_DATA
 void mp_usbd_cdc_data_rx_configure(uint8_t *buffer, size_t length) {
+    CDC_DATA_RX_LOCK();
     cdc_data_rx_ringbuf.buf = buffer;
     cdc_data_rx_ringbuf.size = (uint16_t)length;
     ringbuf_reset(&cdc_data_rx_ringbuf);
-    if (cdc_itf_pending & (1 << MP_USBD_CDC_DATA_ITF)) {
-        tud_cdc_rx_cb(MP_USBD_CDC_DATA_ITF);
-    }
+    CDC_DATA_RX_UNLOCK();
+    mp_usbd_cdc_data_service_pending();
 }
 
 size_t mp_usbd_cdc_data_rx_any(void) {
@@ -181,25 +220,33 @@ size_t mp_usbd_cdc_data_rx_any(void) {
         return 0;
     }
     mp_usbd_task();
-    if (cdc_itf_pending & (1 << MP_USBD_CDC_DATA_ITF)) {
-        tud_cdc_rx_cb(MP_USBD_CDC_DATA_ITF);
-    }
-    return ringbuf_avail(&cdc_data_rx_ringbuf);
+    mp_usbd_cdc_data_service_pending();
+    CDC_DATA_RX_LOCK();
+    size_t available = ringbuf_avail(&cdc_data_rx_ringbuf);
+    CDC_DATA_RX_UNLOCK();
+    return available;
 }
 
-size_t mp_usbd_cdc_data_rx_read(uint8_t *buffer, size_t length) {
+size_t mp_usbd_cdc_data_rx_read_buffered(uint8_t *buffer, size_t length) {
     if (!mp_usbd_cdc_data_rx_ready()) {
         return 0;
     }
-    size_t available = mp_usbd_cdc_data_rx_any();
+    CDC_DATA_RX_LOCK();
+    size_t available = ringbuf_avail(&cdc_data_rx_ringbuf);
     size_t count = MIN(length, available);
     if (count > 0) {
         ringbuf_memcpy_get_internal(&cdc_data_rx_ringbuf, buffer, count);
-        if (cdc_itf_pending & (1 << MP_USBD_CDC_DATA_ITF)) {
-            tud_cdc_rx_cb(MP_USBD_CDC_DATA_ITF);
-        }
+    }
+    CDC_DATA_RX_UNLOCK();
+    if (count > 0) {
+        mp_usbd_cdc_data_service_pending();
     }
     return count;
+}
+
+size_t mp_usbd_cdc_data_rx_read(uint8_t *buffer, size_t length) {
+    mp_usbd_cdc_data_rx_any();
+    return mp_usbd_cdc_data_rx_read_buffered(buffer, length);
 }
 
 size_t mp_usbd_cdc_data_tx_write(const uint8_t *buffer, size_t length) {
@@ -209,6 +256,9 @@ size_t mp_usbd_cdc_data_tx_write(const uint8_t *buffer, size_t length) {
     size_t offset = 0;
     mp_uint_t last_write = mp_hal_ticks_ms();
     while (offset < length) {
+        #if defined(ESP_PLATFORM)
+        mp_usbd_task_lock();
+        #endif
         uint32_t available = tud_cdc_n_write_available(MP_USBD_CDC_DATA_ITF);
         uint32_t count = MIN(length - offset, available);
         uint32_t written = tud_cdc_n_write(
@@ -217,6 +267,9 @@ size_t mp_usbd_cdc_data_tx_write(const uint8_t *buffer, size_t length) {
             count
         );
         tud_cdc_n_write_flush(MP_USBD_CDC_DATA_ITF);
+        #if defined(ESP_PLATFORM)
+        mp_usbd_task_unlock();
+        #endif
         offset += written;
         if (offset >= length) {
             break;
@@ -234,11 +287,24 @@ size_t mp_usbd_cdc_data_tx_write(const uint8_t *buffer, size_t length) {
 
 bool mp_usbd_cdc_data_connected(void) {
     mp_usbd_task();
-    return tud_cdc_n_connected(MP_USBD_CDC_DATA_ITF);
+    #if defined(ESP_PLATFORM)
+    mp_usbd_task_lock();
+    #endif
+    bool connected = tud_cdc_n_connected(MP_USBD_CDC_DATA_ITF);
+    #if defined(ESP_PLATFORM)
+    mp_usbd_task_unlock();
+    #endif
+    return connected;
 }
 
 void mp_usbd_cdc_data_tx_flush(void) {
+    #if defined(ESP_PLATFORM)
+    mp_usbd_task_lock();
+    #endif
     tud_cdc_n_write_flush(MP_USBD_CDC_DATA_ITF);
+    #if defined(ESP_PLATFORM)
+    mp_usbd_task_unlock();
+    #endif
     mp_usbd_task();
 }
 #endif
@@ -251,8 +317,12 @@ mp_uint_t mp_usbd_cdc_tx_strn(const char *str, mp_uint_t len) {
     size_t i = 0;
     while (i < len) {
         uint32_t n = len - i;
+        #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+        mp_usbd_task_lock();
+        #endif
 
-        if (tud_cdc_connected()) {
+        bool connected = tud_cdc_connected();
+        if (connected) {
             // Limit write to available space in tx buffer when connected.
             //
             // (If not connected then we write everything to the fifo, expecting
@@ -263,6 +333,9 @@ mp_uint_t mp_usbd_cdc_tx_strn(const char *str, mp_uint_t len) {
 
         uint32_t n2 = tud_cdc_write(str + i, n);
         tud_cdc_write_flush();
+        #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+        mp_usbd_task_unlock();
+        #endif
         i += n2;
 
         if (i < len) {
@@ -274,7 +347,7 @@ mp_uint_t mp_usbd_cdc_tx_strn(const char *str, mp_uint_t len) {
                     break; // Timeout
                 }
 
-                if (tud_cdc_connected()) {
+                if (connected) {
                     // If we know we're connected then we can wait for host to make
                     // more space
                     mp_event_wait_ms(1);

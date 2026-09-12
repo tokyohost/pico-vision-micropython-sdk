@@ -82,9 +82,13 @@ print(_usb_cdc_data.init())
 ```
 
 当前带双语字体、完整画布 LCD DMA 和原生双 CDC 的 ESP32-S3 固件应依次输出
-`8`、`2`、`1`、`1` 和 `32768`。`fn_lcd.init()` 的屏幕、脚位和缓冲配置示例已
+`8`、`2`、`1`、`2` 和 `32768`。`fn_lcd.init()` 的屏幕、脚位和缓冲配置示例已
 包含在设备端冒烟测试中，不应再使用 API 1 的单整数初始化方式。数据 CDC 的
-32 KB 接收环形缓冲由 `init()` 优先从 PSRAM 分配，PSRAM 不可用时才回退到内部 DRAM。`fn_canvas` 同时提供
+32 KB 接收环形缓冲由 `init()` 优先从 PSRAM 分配，PSRAM 不可用时才回退到内部 DRAM。
+接口版本 2 会启动优先级高于 MicroPython 主任务的 `fn_cdc_rx` FreeRTOS 任务，
+在 C 层按 PV1 头部和 64 字节物理边界组帧。Python 通过 `frames_available()` 和
+`read_frame()` 只取完整帧；四帧队列与原始环形缓冲都满时，固件不丢弃数据，
+而是依靠 USB OUT 端点 NAK 向主机施加背压。`fn_canvas` 同时提供
 `font_glyph()` 与 `text_width()`，并内置 `wqy_8x16`、`fusion_pixel_8x16` 两套
 英文半角八像素、中文全角十六像素字体。完整设备端冒烟测试位于
 `ports/esp32/usermod/tests/smoke_test.py`，可使用 `mpremote` 执行：
