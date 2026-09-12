@@ -3,6 +3,7 @@
 import fn_canvas
 import fn_lcd
 import fn_protocol
+import fn_websocket
 import _usb_cdc_data
 
 
@@ -70,6 +71,18 @@ def _test_usb_cdc():
     assert callable(_usb_cdc_data.read_error)
 
 
+def _test_websocket():
+    """验证原生 WebSocket 完整消息队列和统一发送接口。"""
+    assert fn_websocket.api_version() == 1
+    assert callable(fn_websocket.attach)
+    assert callable(fn_websocket.detach)
+    assert callable(fn_websocket.frames_available)
+    assert callable(fn_websocket.receive_activity)
+    assert callable(fn_websocket.read_frame)
+    assert callable(fn_websocket.read_error)
+    assert callable(fn_websocket.send)
+
+
 def _test_lcd_dma():
     """验证 LCD 原生模块可初始化完整方案并自动比较完整画布。"""
     configuration = {
@@ -115,8 +128,9 @@ def main():
     _test_canvas()
     _test_lcd_dma()
     _test_protocol()
+    _test_websocket()
     _test_usb_cdc()
-    print("fn_canvas、fn_lcd、fn_protocol 与独立 CDC 任务 ESP32-S3 冒烟测试通过")
+    print("fn_canvas、fn_lcd、fn_protocol、fn_websocket 与独立 CDC 任务 ESP32-S3 冒烟测试通过")
 
 
 main()

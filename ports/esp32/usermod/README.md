@@ -1,10 +1,17 @@
 # fn-vision ESP32-S3 原生模块
 
-本目录将 `fn_canvas`、`fn_lcd`、`fn_protocol` 和 `_usb_cdc_data` 接入
+本目录将 `fn_canvas`、`fn_lcd`、`fn_protocol`、`fn_websocket` 和 `_usb_cdc_data` 接入
 MicroPython 的 ESP32 CMake 构建。绘图和协议模块复用通用源码；`fn_lcd` 接收
 屏幕与 GPIO 方案，自动比较完整 RGB565 画布，使用两块内部 SRAM 条带缓冲和
 两块内部 DMA 缓冲只发送变化区域；数据 CDC 模块绑定 ESP32-S3 固件内置的第二路
-TinyUSB CDC。
+TinyUSB CDC；`fn_websocket` 接管已经完成 HTTP Upgrade 的 socket，在独立
+FreeRTOS 任务中完成 WebSocket 解帧、控制帧响应和完整消息排队。
+
+原生模块只负责已升级连接的数据面。ESP-IDF 自带的 `esp_http_server` WebSocket
+接口依赖其内部 `httpd_req_t` 和会话表，不能接管 Python 已完成 Upgrade 的裸
+socket；若使用该组件就必须同时迁移监听、握手与客户端优先级仲裁。因此当前实现
+直接使用 ESP-IDF 官方支持的 BSD socket、`select()`、`recv()`、`send()` 和
+`shutdown()`，并确保同一连接只有一个 C 接收任务和一个统一发送互斥入口。
 
 ## 准备环境
 
@@ -48,7 +55,7 @@ make -C ports/esp32 \
 可避免 `USER_C_MODULES` 相对路径以主组件目录为基准时产生歧义。构建日志应包含：
 
 ```text
-Found User C Module(s): usermod_fn_canvas, usermod_fn_lcd, usermod_fn_protocol, usermod_fn_usb_cdc
+Found User C Module(s): usermod_fn_canvas, usermod_fn_lcd, usermod_fn_protocol, usermod_fn_usb_cdc, usermod_fn_websocket
 ```
 
 普通固件位于 `ports/esp32/build-ESP32_GENERIC_S3/firmware.bin`；N8R8 与 N16R8
@@ -72,17 +79,20 @@ make -C ports/esp32 \
 import fn_canvas
 import fn_lcd
 import fn_protocol
+import fn_websocket
 import _usb_cdc_data
 
 print(fn_canvas.api_version())
 print(fn_lcd.api_version())
 print(fn_protocol.api_version())
+print(fn_websocket.api_version())
 print(_usb_cdc_data.api_version())
 print(_usb_cdc_data.init())
 ```
 
-当前带双语字体、完整画布 LCD DMA 和原生双 CDC 的 ESP32-S3 固件应依次输出
-`8`、`2`、`1`、`2` 和 `32768`。`fn_lcd.init()` 的屏幕、脚位和缓冲配置示例已
+当前带双语字体、完整画布 LCD DMA、原生 WebSocket 数据面和双 CDC 的
+ESP32-S3 固件应依次输出 `8`、`2`、`1`、`1`、`2` 和 `32768`。
+`fn_lcd.init()` 的屏幕、脚位和缓冲配置示例已
 包含在设备端冒烟测试中，不应再使用 API 1 的单整数初始化方式。数据 CDC 的
 32 KB 接收环形缓冲由 `init()` 优先从 PSRAM 分配，PSRAM 不可用时才回退到内部 DRAM。
 接口版本 2 会启动优先级高于 MicroPython 主任务的 `fn_cdc_rx` FreeRTOS 任务，
@@ -102,3 +112,4 @@ mpremote connect /dev/ttyACM0 run ports/esp32/usermod/tests/smoke_test.py
 - `ports/esp32/usermod/fn_canvas/micropython.cmake`
 - `ports/esp32/usermod/fn_lcd/micropython.cmake`
 - `ports/esp32/usermod/fn_protocol/micropython.cmake`
+- `ports/esp32/usermod/fn_websocket/micropython.cmake`
