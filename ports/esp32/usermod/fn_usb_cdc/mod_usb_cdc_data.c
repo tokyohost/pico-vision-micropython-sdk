@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 #include "shared/tinyusb/mp_usbd.h"
 #include "shared/tinyusb/mp_usbd_cdc.h"
 

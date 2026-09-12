@@ -58,7 +58,7 @@ void usb_usj_mode(void) {
     // 必须先通知主机设备离线并留出总线复位时间，再释放 OTG PHY；否则仍有
     // 端点传输时直接切换控制器，ESP32-S3 可能停在 PHY 释放阶段而无法重枚举。
     if (tusb_inited()) {
-        #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+        #if MICROPY_HW_USB_CDC_DATA
         mp_usbd_task_suspend();
         mp_usbd_task_lock();
         #endif
@@ -68,7 +68,7 @@ void usb_usj_mode(void) {
             tud_cdc_n_write_clear(interface);
         }
         tud_disconnect();
-        #if MICROPY_HW_USB_CDC_DATA && defined(ESP_PLATFORM)
+        #if MICROPY_HW_USB_CDC_DATA
         mp_usbd_task_unlock();
         #endif
         mp_hal_delay_ms(50);
